@@ -1,0 +1,39 @@
+# Copy this file to your project's aggregate-config branch at:
+#   .github/workflows/aggregate.yml
+#
+# For self-hosted staging projects that need aggregate + deploy.
+# Replace <STAGING_IP> and <PROJECT_DIR> with actual values.
+
+name: Aggregate and deploy
+
+on:
+  push:
+    branches: [aggregate-config]
+    paths:
+      - "repos.yml"
+      - ".github/workflows/**"
+  workflow_dispatch:
+
+concurrency:
+  group: aggregate-config
+  cancel-in-progress: false
+
+jobs:
+  aggregate:
+    uses: qrtl/odoo-ci-workflows/.github/workflows/gitaggregate.yml@main
+    with:
+      config_path: repos.yml
+    secrets: inherit
+    permissions:
+      contents: write
+
+  deploy:
+    needs: aggregate
+    uses: qrtl/odoo-ci-workflows/.github/workflows/deploy-staging.yml@main
+    with:
+      staging_host: "<STAGING_IP>"
+      staging_port: "60897"
+      staging_user: quartile
+      project_dir: "<PROJECT_DIR>"
+      service_name: odoo
+    secrets: inherit

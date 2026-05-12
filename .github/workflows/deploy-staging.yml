@@ -1,0 +1,65 @@
+name: Deploy to staging
+
+on:
+  workflow_call:
+    inputs:
+      staging_host:
+        description: Staging server IP or hostname
+        type: string
+        required: true
+      staging_port:
+        description: SSH port
+        type: string
+        default: "60897"
+      staging_user:
+        description: SSH user
+        type: string
+        default: quartile
+      project_dir:
+        description: Project directory on the staging server (e.g. /odoo/code)
+        type: string
+        required: true
+      service_name:
+        description: Docker container name to restart
+        type: string
+        default: odoo
+      deploy_branch:
+        description: Branch to deploy
+        type: string
+        default: _git_aggregated
+    secrets:
+      STAGING_SSH_KEY:
+        required: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Configure SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.STAGING_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -p ${{ inputs.staging_port }} ${{ inputs.staging_host }} >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Deploy to staging
+        run: |
+          ssh -i ~/.ssh/deploy_key \
+            -p ${{ inputs.staging_port }} \
+            -o StrictHostKeyChecking=accept-new \
+            ${{ inputs.staging_user }}@${{ inputs.staging_host }} '
+            set -e
+            LOCKFILE="/tmp/deploy-${{ inputs.service_name }}.lock"
+            exec 200>"$LOCKFILE"
+            flock -n 200 || { echo "Deploy already in progress"; exit 1; }
+            cd ${{ inputs.project_dir }}
+            git fetch origin ${{ inputs.deploy_branch }}
+            git checkout -B ${{ inputs.deploy_branch }} origin/${{ inputs.deploy_branch }}
+            docker restart ${{ inputs.service_name }}
+            echo "Deploy complete"
+          '
+
+      - name: Cleanup SSH key
+        if: always()
+        run: rm -f ~/.ssh/deploy_key

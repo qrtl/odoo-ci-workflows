@@ -1,0 +1,28 @@
+# Copy this file to your project's aggregate-config branch at:
+#   .github/workflows/aggregate.yml
+#
+# For Odoo.sh projects that only need the _git_aggregated branch built.
+# Odoo.sh picks up the branch and rebuilds automatically.
+
+name: Aggregate addons
+
+on:
+  push:
+    branches: [aggregate-config]
+    paths:
+      - "repos.yml"
+      - ".github/workflows/**"
+  workflow_dispatch:
+
+concurrency:
+  group: aggregate-config
+  cancel-in-progress: false
+
+jobs:
+  aggregate:
+    uses: qrtl/odoo-ci-workflows/.github/workflows/gitaggregate.yml@main
+    with:
+      config_path: repos.yml
+    secrets: inherit
+    permissions:
+      contents: write

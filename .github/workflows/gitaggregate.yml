@@ -1,0 +1,54 @@
+name: Gitaggregate
+
+on:
+  workflow_call:
+    inputs:
+      config_path:
+        description: Path to repos.yml in the calling repo
+        type: string
+        default: repos.yml
+      target_branch:
+        description: Branch to push materialized addons to
+        type: string
+        default: _git_aggregated
+      commit_message:
+        description: Commit message for the aggregated commit
+        type: string
+        default: update addons
+      python_version:
+        description: Python version for the runner
+        type: string
+        default: "3.11"
+
+concurrency:
+  group: aggregate-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  aggregate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/checkout@v4
+        with:
+          repository: qrtl/odoo-ci-workflows
+          path: .ci-tools
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python_version }}
+
+      - run: pip install git-aggregator pyyaml
+
+      - name: Build addons and push to ${{ inputs.target_branch }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TARGET_BRANCH: ${{ inputs.target_branch }}
+          COMMIT_MESSAGE: ${{ inputs.commit_message }}
+        run: python .ci-tools/scripts/aggregate.py ${{ inputs.config_path }}
