@@ -66,9 +66,8 @@ def main():
     run("git", "clone", repo_url, str(repo))
 
     # target branch を checkout（無ければ作る）
-    run("git", "fetch", "origin", target_branch, cwd=repo)
-    # fetchが失敗しても初回はあり得るので安全に
     try:
+        run("git", "fetch", "origin", target_branch, cwd=repo)
         run("git", "checkout", "-B", target_branch, f"origin/{target_branch}", cwd=repo)
     except subprocess.CalledProcessError:
         run("git", "checkout", "-B", target_branch, cwd=repo)
