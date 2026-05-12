@@ -54,8 +54,8 @@ jobs:
             exec 200>"$LOCKFILE"
             flock -n 200 || { echo "Deploy already in progress"; exit 1; }
             cd ${{ inputs.project_dir }}
-            git fetch origin ${{ inputs.deploy_branch }}
-            git checkout -B ${{ inputs.deploy_branch }} origin/${{ inputs.deploy_branch }}
+            sudo -u odoo git fetch origin ${{ inputs.deploy_branch }}
+            sudo -u odoo git checkout -B ${{ inputs.deploy_branch }} origin/${{ inputs.deploy_branch }}
             docker restart ${{ inputs.service_name }}
             echo "Deploy complete"
           '
