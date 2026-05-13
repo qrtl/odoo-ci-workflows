@@ -67,38 +67,30 @@ def main():
 
     # target branch を checkout（無ければ作る）
     try:
-        run("git", "fetch", "origin", target_branch, cwd=repo)
-        run("git", "checkout", "-B", target_branch, f"origin/{target_branch}", cwd=repo)
+        run(“git”, “fetch”, “origin”, target_branch, cwd=repo)
+        run(“git”, “checkout”, “-B”, target_branch, f”origin/{target_branch}”, cwd=repo)
     except subprocess.CalledProcessError:
-        run("git", "checkout", "-B", target_branch, cwd=repo)
+        run(“git”, “checkout”, “-B”, target_branch, cwd=repo)
 
-    # 生成対象ディレクトリを削除（addons/oca, addons/custom, addons/private）
+    # Wipe everything except .git so the branch contains only aggregated output
+    for item in repo.iterdir():
+        if item.name == “.git”:
+            continue
+        if item.is_dir():
+            shutil.rmtree(item)
+        else:
+            item.unlink()
+    run(“git”, “rm”, “-rf”, “--cached”, “--ignore-unmatch”, “.”, cwd=repo)
+
+    out_dirs = [k.replace(“./”, “”) for k in data.keys()]
+
+    (repo / “repos.yml”).write_text(cfg_text, encoding=”utf-8”)
+    run(“gitaggregate”, “-c”, “repos.yml”, cwd=repo)
+    run(“rm”, “-f”, “repos.yml”, cwd=repo)
+
+    # Remove inner .git dirs so aggregated repos become plain directories
     for d in out_dirs:
-        rm_tree(repo / d)
-
-    # gitaggregate 実行（addons/* に実体生成）
-    (repo / "repos.yml").write_text(cfg_text, encoding="utf-8")
-    run("gitaggregate", "-c", "repos.yml", cwd=repo)
-    run("rm", "-f", "repos.yml", cwd=repo)
-
-    # (A) 出力先は repos.yml の key から自動で取る（oca/custom/private のうち必要なものだけ）
-    out_dirs = [k.replace("./", "") for k in data.keys()]  # 例: ["addons/oca","addons/private",...]
-
-    # (B) 既存の gitlink / embedded を index から確実に除去（無いものは無視）
-    run("git", "rm", "-r", "--cached", "--ignore-unmatch", *out_dirs, cwd=repo)
-
-    # (C) 作業ツリーも掃除
-    for d in out_dirs:
-        rm_tree(repo / d)
-
-    # (D) 生成
-    (repo / "repos.yml").write_text(cfg_text, encoding="utf-8")
-    run("gitaggregate", "-c", "repos.yml", cwd=repo)
-    run("rm", "-f", "repos.yml", cwd=repo)
-
-    # (E) ★最重要：git-aggregator が作る内側 .git を消して “実体” にする
-    for d in out_dirs:
-        rm_tree(repo / d / ".git")
+        rm_tree(repo / d / “.git”)
 
     # (F) stage everything first
     run("git", "add", "-A", cwd=repo)
