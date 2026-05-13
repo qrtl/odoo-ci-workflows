@@ -67,30 +67,30 @@ def main():
 
     # target branch を checkout（無ければ作る）
     try:
-        run(“git”, “fetch”, “origin”, target_branch, cwd=repo)
-        run(“git”, “checkout”, “-B”, target_branch, f”origin/{target_branch}”, cwd=repo)
+        run("git", "fetch", "origin", target_branch, cwd=repo)
+        run("git", "checkout", "-B", target_branch, f"origin/{target_branch}", cwd=repo)
     except subprocess.CalledProcessError:
-        run(“git”, “checkout”, “-B”, target_branch, cwd=repo)
+        run("git", "checkout", "-B", target_branch, cwd=repo)
 
     # Wipe everything except .git so the branch contains only aggregated output
     for item in repo.iterdir():
-        if item.name == “.git”:
+        if item.name == ".git":
             continue
         if item.is_dir():
             shutil.rmtree(item)
         else:
             item.unlink()
-    run(“git”, “rm”, “-rf”, “--cached”, “--ignore-unmatch”, “.”, cwd=repo)
+    run("git", "rm", "-rf", "--cached", "--ignore-unmatch", ".", cwd=repo)
 
-    out_dirs = [k.replace(“./”, “”) for k in data.keys()]
+    out_dirs = [k.replace("./", "") for k in data.keys()]
 
-    (repo / “repos.yml”).write_text(cfg_text, encoding=”utf-8”)
-    run(“gitaggregate”, “-c”, “repos.yml”, cwd=repo)
-    run(“rm”, “-f”, “repos.yml”, cwd=repo)
+    (repo / "repos.yml").write_text(cfg_text, encoding="utf-8")
+    run("gitaggregate", "-c", "repos.yml", cwd=repo)
+    run("rm", "-f", "repos.yml", cwd=repo)
 
     # Remove inner .git dirs so aggregated repos become plain directories
     for d in out_dirs:
-        rm_tree(repo / d / “.git”)
+        rm_tree(repo / d / ".git")
 
     # (F) stage everything first
     run("git", "add", "-A", cwd=repo)
