@@ -77,8 +77,10 @@ jobs:
             for db in ${{ inputs.upgrade_databases }}; do
               echo "== $db: upgrading the addons whose files changed"
               # Failure is the exit status, not the log text: a successful run
-              # prints "ERROR: couldn't create the logfile directory" while
-              # falling back to stdout, which is exactly what we want it to do.
+              # prints an ERROR line about the logfile directory while falling
+              # back to stdout, which is exactly what it is being asked to do.
+              # Apostrophes are forbidden in here - the whole remote command is
+              # one single-quoted argument, and one would end it early.
               docker exec -e PYTHONPATH="${{ inputs.odoo_source_path }}" \
                 -u odoo "${{ inputs.service_name }}" \
                 click-odoo-update -d "$db" --ignore-core-addons \
