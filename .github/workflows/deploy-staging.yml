@@ -27,6 +27,21 @@ on:
         description: Branch to deploy
         type: string
         default: _git_aggregated
+      upgrade_databases:
+        description: >
+          Space-separated databases to upgrade after the code is deployed, with
+          click-odoo-update. Empty (the default) keeps the previous behaviour:
+          code is deployed and the service restarted, nothing is upgraded.
+        type: string
+        default: ""
+      odoo_source_path:
+        description: >
+          Path to the Odoo source inside the container, exported as PYTHONPATH:
+          Odoo is bind-mounted rather than pip-installed, so click-odoo cannot
+          import it otherwise. The default is the standard layout; this exists
+          for a host that deviates from it.
+        type: string
+        default: /odoo/code/odoo
     secrets:
       STAGING_SSH_KEY:
         required: true
@@ -57,6 +72,16 @@ jobs:
             sudo -u odoo git fetch origin ${{ inputs.deploy_branch }}
             sudo -u odoo git reset --hard origin/${{ inputs.deploy_branch }}
             docker restart ${{ inputs.service_name }}
+            for db in ${{ inputs.upgrade_databases }}; do
+              echo "== $db: upgrading the addons whose files changed"
+              # Failure is the exit status, not the log text: a successful run
+              # prints "ERROR: couldn't create the logfile directory" while
+              # falling back to stdout, which is exactly what we want it to do.
+              docker exec -e PYTHONPATH=${{ inputs.odoo_source_path }} \
+                -u odoo ${{ inputs.service_name }} \
+                click-odoo-update -d "$db" --ignore-core-addons \
+                  --watcher-max-seconds 30 --logfile=/dev/stdout
+            done
             echo "Deploy complete"
           '
 
