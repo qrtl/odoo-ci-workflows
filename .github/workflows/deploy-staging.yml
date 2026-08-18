@@ -72,13 +72,15 @@ jobs:
             sudo -u odoo git fetch origin ${{ inputs.deploy_branch }}
             sudo -u odoo git reset --hard origin/${{ inputs.deploy_branch }}
             docker restart ${{ inputs.service_name }}
+            # Unquoted on purpose: the word splitting is what turns the input
+            # into one iteration per database.
             for db in ${{ inputs.upgrade_databases }}; do
               echo "== $db: upgrading the addons whose files changed"
               # Failure is the exit status, not the log text: a successful run
               # prints "ERROR: couldn't create the logfile directory" while
               # falling back to stdout, which is exactly what we want it to do.
-              docker exec -e PYTHONPATH=${{ inputs.odoo_source_path }} \
-                -u odoo ${{ inputs.service_name }} \
+              docker exec -e PYTHONPATH="${{ inputs.odoo_source_path }}" \
+                -u odoo "${{ inputs.service_name }}" \
                 click-odoo-update -d "$db" --ignore-core-addons \
                   --watcher-max-seconds 30 --logfile=/dev/stdout
             done
