@@ -99,6 +99,21 @@ jobs:
             cat <<'REMOTE'
           set -e
 
+          # Check the inputs before touching the host, so a bad value cannot leave
+          # the code deployed with nothing upgraded. A malformed regex makes
+          # [[ =~ ]] return 2, and inside an `if` that is indistinguishable from
+          # "no match" while set -e stays quiet - every database would then fall
+          # through into the upgrade list, copy-* included. 0 and 1 are match and
+          # no match; above that is bash rejecting the pattern.
+          if [ "$upgrade_databases" = auto ]; then
+            regex_status=0
+            [[ "" =~ $upgrade_exclude_regex ]] || regex_status=$?
+            if [ "$regex_status" -gt 1 ]; then
+              echo "upgrade_exclude_regex is not a valid regex: $upgrade_exclude_regex" >&2
+              exit 1
+            fi
+          fi
+
           LOCKFILE="/tmp/deploy-$service_name.lock"
           exec 200>"$LOCKFILE"
           flock -n 200 || { echo "Deploy already in progress"; exit 1; }
