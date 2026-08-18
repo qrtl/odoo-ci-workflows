@@ -29,11 +29,23 @@ on:
         default: _git_aggregated
       upgrade_databases:
         description: >
-          Space-separated databases to upgrade after the code is deployed, with
-          click-odoo-update. Empty (the default) keeps the previous behaviour:
-          code is deployed and the service restarted, nothing is upgraded.
+          Which databases to upgrade after the code is deployed, with
+          click-odoo-update. Space-separated names, or `auto` for every
+          same-version Odoo database on the host except those matching
+          upgrade_exclude_regex. Empty (the default) keeps the previous
+          behaviour: code is deployed and the service restarted, nothing is
+          upgraded.
         type: string
         default: ""
+      upgrade_exclude_regex:
+        description: >
+          Databases to leave alone in `auto` mode. The default excludes the
+          copy-* databases restored from production: they are recreated daily,
+          so upgrading them belongs to the restore job, which is also the only
+          place that can neutralize afterwards - an upgrade re-applies data
+          files, ir.cron among them.
+        type: string
+        default: "^copy-"
       odoo_source_path:
         description: >
           Path to the Odoo source inside the container, exported as PYTHONPATH:
@@ -73,6 +85,7 @@ jobs:
           SERVICE_NAME: ${{ inputs.service_name }}
           DEPLOY_BRANCH: ${{ inputs.deploy_branch }}
           UPGRADE_DATABASES: ${{ inputs.upgrade_databases }}
+          UPGRADE_EXCLUDE_REGEX: ${{ inputs.upgrade_exclude_regex }}
           ODOO_SOURCE_PATH: ${{ inputs.odoo_source_path }}
         run: |
           {
@@ -80,6 +93,7 @@ jobs:
             printf 'service_name=%q\n'      "$SERVICE_NAME"
             printf 'deploy_branch=%q\n'     "$DEPLOY_BRANCH"
             printf 'upgrade_databases=%q\n' "$UPGRADE_DATABASES"
+            printf 'upgrade_exclude_regex=%q\n' "$UPGRADE_EXCLUDE_REGEX"
             printf 'odoo_source_path=%q\n'  "$ODOO_SOURCE_PATH"
             cat <<'REMOTE'
           set -e
@@ -93,10 +107,42 @@ jobs:
           sudo -u odoo git reset --hard "origin/$deploy_branch"
           docker restart "$service_name"
 
+          # `auto` asks the server what exists. list_dbs reports every non-template
+          # database owned by the connecting user, and list_db_incompatible drops
+          # the ones that are not this version of Odoo - a leftover from an older
+          # series would otherwise fail the deploy. Credentials are not handled
+          # here: the config is found through ODOO_RC inside the container.
+          if [ "$upgrade_databases" = auto ]; then
+            candidates=$(docker exec -e PYTHONPATH="$odoo_source_path" \
+              -u odoo "$service_name" python3 -c '
+          import odoo
+          odoo.tools.config.parse_config([])
+          from odoo.service.db import list_dbs, list_db_incompatible
+          dbs = list_dbs(force=True)
+          bad = set(list_db_incompatible(dbs))
+          print(" ".join(d for d in dbs if d not in bad))
+          ')
+          else
+            candidates="$upgrade_databases"
+          fi
+
           # read -ra splits on whitespace without globbing, so a database name is
           # only ever a database name. An empty value yields an empty array and
           # the loop does not run, which is the default.
-          read -ra databases <<<"$upgrade_databases"
+          read -ra found <<<"$candidates"
+          databases=()
+          skipped=()
+          for db in "${found[@]}"; do
+            if [[ "$db" =~ $upgrade_exclude_regex ]]; then
+              skipped+=("$db")
+            else
+              databases+=("$db")
+            fi
+          done
+          if [ "${#skipped[@]}" -gt 0 ]; then
+            echo "== leaving alone (matches $upgrade_exclude_regex): ${skipped[*]}"
+          fi
+
           for db in "${databases[@]}"; do
             echo "== $db: upgrading the addons whose files changed"
             # Failure is the exit status, not the log text: a successful run
