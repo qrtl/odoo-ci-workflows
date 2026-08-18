@@ -27,6 +27,34 @@ on:
         description: Branch to deploy
         type: string
         default: _git_aggregated
+      upgrade_databases:
+        description: >
+          Which databases to upgrade after the code is deployed, with
+          click-odoo-update. Space-separated names, or `auto` for every
+          same-version Odoo database on the host except those matching
+          upgrade_exclude_regex. Empty (the default) keeps the previous
+          behaviour: code is deployed and the service restarted, nothing is
+          upgraded.
+        type: string
+        default: ""
+      upgrade_exclude_regex:
+        description: >
+          Databases to leave alone in `auto` mode; an explicit list in
+          upgrade_databases is never filtered. The default excludes the copy-*
+          databases restored from production: they are recreated daily, so
+          upgrading them belongs to the restore job, which is also the only
+          place that can neutralize afterwards - an upgrade re-applies data
+          files, ir.cron among them.
+        type: string
+        default: "^copy-"
+      odoo_source_path:
+        description: >
+          Path to the Odoo source inside the container, exported as PYTHONPATH:
+          Odoo is bind-mounted rather than pip-installed, so click-odoo cannot
+          import it otherwise. The default is the standard layout; this exists
+          for a host that deviates from it.
+        type: string
+        default: /odoo/code/odoo
     secrets:
       STAGING_SSH_KEY:
         required: true
@@ -44,21 +72,113 @@ jobs:
           ssh-keyscan -p ${{ inputs.staging_port }} ${{ inputs.staging_host }} >> ~/.ssh/known_hosts 2>/dev/null
 
       - name: Deploy to staging
+        # No caller value is ever placed on the ssh command line or interpolated
+        # into the script. ssh joins the words of a remote command with spaces
+        # and lets the remote shell re-split them, so local quoting does not
+        # survive that boundary: `bash -s -- "a b" c` arrives as three words.
+        # Instead the values are emitted as %q-quoted assignments and piped,
+        # with the script, into the remote shell on stdin.
+        env:
+          STAGING_HOST: ${{ inputs.staging_host }}
+          STAGING_PORT: ${{ inputs.staging_port }}
+          STAGING_USER: ${{ inputs.staging_user }}
+          PROJECT_DIR: ${{ inputs.project_dir }}
+          SERVICE_NAME: ${{ inputs.service_name }}
+          DEPLOY_BRANCH: ${{ inputs.deploy_branch }}
+          UPGRADE_DATABASES: ${{ inputs.upgrade_databases }}
+          UPGRADE_EXCLUDE_REGEX: ${{ inputs.upgrade_exclude_regex }}
+          ODOO_SOURCE_PATH: ${{ inputs.odoo_source_path }}
         run: |
-          ssh -i ~/.ssh/deploy_key \
-            -p ${{ inputs.staging_port }} \
-            -o StrictHostKeyChecking=accept-new \
-            ${{ inputs.staging_user }}@${{ inputs.staging_host }} '
-            set -e
-            LOCKFILE="/tmp/deploy-${{ inputs.service_name }}.lock"
-            exec 200>"$LOCKFILE"
-            flock -n 200 || { echo "Deploy already in progress"; exit 1; }
-            cd ${{ inputs.project_dir }}
-            sudo -u odoo git fetch origin ${{ inputs.deploy_branch }}
-            sudo -u odoo git reset --hard origin/${{ inputs.deploy_branch }}
-            docker restart ${{ inputs.service_name }}
-            echo "Deploy complete"
-          '
+          {
+            printf 'project_dir=%q\n'       "$PROJECT_DIR"
+            printf 'service_name=%q\n'      "$SERVICE_NAME"
+            printf 'deploy_branch=%q\n'     "$DEPLOY_BRANCH"
+            printf 'upgrade_databases=%q\n' "$UPGRADE_DATABASES"
+            printf 'upgrade_exclude_regex=%q\n' "$UPGRADE_EXCLUDE_REGEX"
+            printf 'odoo_source_path=%q\n'  "$ODOO_SOURCE_PATH"
+            cat <<'REMOTE'
+          set -e
+
+          # Check the inputs before touching the host, so a bad value cannot leave
+          # the code deployed with nothing upgraded. A malformed regex makes
+          # [[ =~ ]] return 2, and inside an `if` that is indistinguishable from
+          # "no match" while set -e stays quiet - every database would then fall
+          # through into the upgrade list, copy-* included. 0 and 1 are match and
+          # no match; above that is bash rejecting the pattern.
+          if [ "$upgrade_databases" = auto ]; then
+            regex_status=0
+            [[ "" =~ $upgrade_exclude_regex ]] || regex_status=$?
+            if [ "$regex_status" -gt 1 ]; then
+              echo "upgrade_exclude_regex is not a valid regex: $upgrade_exclude_regex" >&2
+              exit 1
+            fi
+          fi
+
+          LOCKFILE="/tmp/deploy-$service_name.lock"
+          exec 200>"$LOCKFILE"
+          flock -n 200 || { echo "Deploy already in progress"; exit 1; }
+
+          cd "$project_dir"
+          sudo -u odoo git fetch origin "$deploy_branch"
+          sudo -u odoo git reset --hard "origin/$deploy_branch"
+          docker restart "$service_name"
+
+          # `auto` asks the server what exists. list_dbs reports every non-template
+          # database owned by the connecting user, and list_db_incompatible drops
+          # the ones that are not this version of Odoo - a leftover from an older
+          # series would otherwise fail the deploy. Credentials are not handled
+          # here: the config is found through ODOO_RC inside the container.
+          # read -ra splits on whitespace without globbing, so a database name is
+          # only ever a database name. An empty value yields an empty array and
+          # the loop does not run, which is the default.
+          databases=()
+          skipped=()
+          if [ "$upgrade_databases" = auto ]; then
+            candidates=$(docker exec -e PYTHONPATH="$odoo_source_path" \
+              -u odoo "$service_name" python3 -c '
+          import odoo
+          odoo.tools.config.parse_config([])
+          from odoo.service.db import list_dbs, list_db_incompatible
+          dbs = list_dbs(force=True)
+          bad = set(list_db_incompatible(dbs))
+          print(" ".join(d for d in dbs if d not in bad))
+          ')
+            read -ra found <<<"$candidates"
+            # The exclusion filters what `auto` discovered, never a name the caller
+            # wrote down. An explicit list is a decision, and dropping a name out
+            # of it silently is the class of failure this step exists to remove:
+            # a caller who asks for copy-test gets copy-test, or an error from
+            # click-odoo-update, but never a green deploy that skipped it.
+            for db in "${found[@]}"; do
+              if [[ "$db" =~ $upgrade_exclude_regex ]]; then
+                skipped+=("$db")
+              else
+                databases+=("$db")
+              fi
+            done
+          else
+            read -ra databases <<<"$upgrade_databases"
+          fi
+          if [ "${#skipped[@]}" -gt 0 ]; then
+            echo "== leaving alone (matches $upgrade_exclude_regex): ${skipped[*]}"
+          fi
+
+          for db in "${databases[@]}"; do
+            echo "== $db: upgrading the addons whose files changed"
+            # Failure is the exit status, not the log text: a successful run
+            # prints an ERROR line about the logfile directory while falling
+            # back to stdout, which is what it is being asked to do.
+            docker exec -e PYTHONPATH="$odoo_source_path" \
+              -u odoo "$service_name" \
+              click-odoo-update -d "$db" --ignore-core-addons \
+                --watcher-max-seconds 30 --logfile=/dev/stdout
+          done
+          echo "Deploy complete"
+          REMOTE
+          } | ssh -i ~/.ssh/deploy_key \
+                -p "$STAGING_PORT" \
+                -o StrictHostKeyChecking=accept-new \
+                "$STAGING_USER@$STAGING_HOST" bash -s
 
       - name: Cleanup SSH key
         if: always()
