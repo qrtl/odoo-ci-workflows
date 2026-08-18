@@ -59,11 +59,12 @@ jobs:
           ssh-keyscan -p ${{ inputs.staging_port }} ${{ inputs.staging_host }} >> ~/.ssh/known_hosts 2>/dev/null
 
       - name: Deploy to staging
-        # Every input is passed to the remote shell as data - an argument to
-        # `bash -s` - and never interpolated into the script itself. A ${{ }}
-        # expression inside the script would be substituted before the shell
-        # parses it, so any caller-supplied value would be executable code on
-        # the staging host rather than a value.
+        # No caller value is ever placed on the ssh command line or interpolated
+        # into the script. ssh joins the words of a remote command with spaces
+        # and lets the remote shell re-split them, so local quoting does not
+        # survive that boundary: `bash -s -- "a b" c` arrives as three words.
+        # Instead the values are emitted as %q-quoted assignments and piped,
+        # with the script, into the remote shell on stdin.
         env:
           STAGING_HOST: ${{ inputs.staging_host }}
           STAGING_PORT: ${{ inputs.staging_port }}
@@ -74,18 +75,14 @@ jobs:
           UPGRADE_DATABASES: ${{ inputs.upgrade_databases }}
           ODOO_SOURCE_PATH: ${{ inputs.odoo_source_path }}
         run: |
-          ssh -i ~/.ssh/deploy_key \
-            -p "$STAGING_PORT" \
-            -o StrictHostKeyChecking=accept-new \
-            "$STAGING_USER@$STAGING_HOST" \
-            bash -s -- "$PROJECT_DIR" "$SERVICE_NAME" "$DEPLOY_BRANCH" \
-                       "$UPGRADE_DATABASES" "$ODOO_SOURCE_PATH" <<'REMOTE'
+          {
+            printf 'project_dir=%q\n'       "$PROJECT_DIR"
+            printf 'service_name=%q\n'      "$SERVICE_NAME"
+            printf 'deploy_branch=%q\n'     "$DEPLOY_BRANCH"
+            printf 'upgrade_databases=%q\n' "$UPGRADE_DATABASES"
+            printf 'odoo_source_path=%q\n'  "$ODOO_SOURCE_PATH"
+            cat <<'REMOTE'
           set -e
-          project_dir="$1"
-          service_name="$2"
-          deploy_branch="$3"
-          upgrade_databases="$4"
-          odoo_source_path="$5"
 
           LOCKFILE="/tmp/deploy-$service_name.lock"
           exec 200>"$LOCKFILE"
@@ -112,6 +109,10 @@ jobs:
           done
           echo "Deploy complete"
           REMOTE
+          } | ssh -i ~/.ssh/deploy_key \
+                -p "$STAGING_PORT" \
+                -o StrictHostKeyChecking=accept-new \
+                "$STAGING_USER@$STAGING_HOST" bash -s
 
       - name: Cleanup SSH key
         if: always()
