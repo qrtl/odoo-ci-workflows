@@ -59,35 +59,59 @@ jobs:
           ssh-keyscan -p ${{ inputs.staging_port }} ${{ inputs.staging_host }} >> ~/.ssh/known_hosts 2>/dev/null
 
       - name: Deploy to staging
+        # Every input is passed to the remote shell as data - an argument to
+        # `bash -s` - and never interpolated into the script itself. A ${{ }}
+        # expression inside the script would be substituted before the shell
+        # parses it, so any caller-supplied value would be executable code on
+        # the staging host rather than a value.
+        env:
+          STAGING_HOST: ${{ inputs.staging_host }}
+          STAGING_PORT: ${{ inputs.staging_port }}
+          STAGING_USER: ${{ inputs.staging_user }}
+          PROJECT_DIR: ${{ inputs.project_dir }}
+          SERVICE_NAME: ${{ inputs.service_name }}
+          DEPLOY_BRANCH: ${{ inputs.deploy_branch }}
+          UPGRADE_DATABASES: ${{ inputs.upgrade_databases }}
+          ODOO_SOURCE_PATH: ${{ inputs.odoo_source_path }}
         run: |
           ssh -i ~/.ssh/deploy_key \
-            -p ${{ inputs.staging_port }} \
+            -p "$STAGING_PORT" \
             -o StrictHostKeyChecking=accept-new \
-            ${{ inputs.staging_user }}@${{ inputs.staging_host }} '
-            set -e
-            LOCKFILE="/tmp/deploy-${{ inputs.service_name }}.lock"
-            exec 200>"$LOCKFILE"
-            flock -n 200 || { echo "Deploy already in progress"; exit 1; }
-            cd ${{ inputs.project_dir }}
-            sudo -u odoo git fetch origin ${{ inputs.deploy_branch }}
-            sudo -u odoo git reset --hard origin/${{ inputs.deploy_branch }}
-            docker restart ${{ inputs.service_name }}
-            # Unquoted on purpose: the word splitting is what turns the input
-            # into one iteration per database.
-            for db in ${{ inputs.upgrade_databases }}; do
-              echo "== $db: upgrading the addons whose files changed"
-              # Failure is the exit status, not the log text: a successful run
-              # prints an ERROR line about the logfile directory while falling
-              # back to stdout, which is exactly what it is being asked to do.
-              # Apostrophes are forbidden in here - the whole remote command is
-              # one single-quoted argument, and one would end it early.
-              docker exec -e PYTHONPATH="${{ inputs.odoo_source_path }}" \
-                -u odoo "${{ inputs.service_name }}" \
-                click-odoo-update -d "$db" --ignore-core-addons \
-                  --watcher-max-seconds 30 --logfile=/dev/stdout
-            done
-            echo "Deploy complete"
-          '
+            "$STAGING_USER@$STAGING_HOST" \
+            bash -s -- "$PROJECT_DIR" "$SERVICE_NAME" "$DEPLOY_BRANCH" \
+                       "$UPGRADE_DATABASES" "$ODOO_SOURCE_PATH" <<'REMOTE'
+          set -e
+          project_dir="$1"
+          service_name="$2"
+          deploy_branch="$3"
+          upgrade_databases="$4"
+          odoo_source_path="$5"
+
+          LOCKFILE="/tmp/deploy-$service_name.lock"
+          exec 200>"$LOCKFILE"
+          flock -n 200 || { echo "Deploy already in progress"; exit 1; }
+
+          cd "$project_dir"
+          sudo -u odoo git fetch origin "$deploy_branch"
+          sudo -u odoo git reset --hard "origin/$deploy_branch"
+          docker restart "$service_name"
+
+          # read -ra splits on whitespace without globbing, so a database name is
+          # only ever a database name. An empty value yields an empty array and
+          # the loop does not run, which is the default.
+          read -ra databases <<<"$upgrade_databases"
+          for db in "${databases[@]}"; do
+            echo "== $db: upgrading the addons whose files changed"
+            # Failure is the exit status, not the log text: a successful run
+            # prints an ERROR line about the logfile directory while falling
+            # back to stdout, which is what it is being asked to do.
+            docker exec -e PYTHONPATH="$odoo_source_path" \
+              -u odoo "$service_name" \
+              click-odoo-update -d "$db" --ignore-core-addons \
+                --watcher-max-seconds 30 --logfile=/dev/stdout
+          done
+          echo "Deploy complete"
+          REMOTE
 
       - name: Cleanup SSH key
         if: always()
