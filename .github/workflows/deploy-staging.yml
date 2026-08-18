@@ -39,9 +39,10 @@ on:
         default: ""
       upgrade_exclude_regex:
         description: >
-          Databases to leave alone in `auto` mode. The default excludes the
-          copy-* databases restored from production: they are recreated daily,
-          so upgrading them belongs to the restore job, which is also the only
+          Databases to leave alone in `auto` mode; an explicit list in
+          upgrade_databases is never filtered. The default excludes the copy-*
+          databases restored from production: they are recreated daily, so
+          upgrading them belongs to the restore job, which is also the only
           place that can neutralize afterwards - an upgrade re-applies data
           files, ir.cron among them.
         type: string
@@ -112,6 +113,11 @@ jobs:
           # the ones that are not this version of Odoo - a leftover from an older
           # series would otherwise fail the deploy. Credentials are not handled
           # here: the config is found through ODOO_RC inside the container.
+          # read -ra splits on whitespace without globbing, so a database name is
+          # only ever a database name. An empty value yields an empty array and
+          # the loop does not run, which is the default.
+          databases=()
+          skipped=()
           if [ "$upgrade_databases" = auto ]; then
             candidates=$(docker exec -e PYTHONPATH="$odoo_source_path" \
               -u odoo "$service_name" python3 -c '
@@ -122,23 +128,22 @@ jobs:
           bad = set(list_db_incompatible(dbs))
           print(" ".join(d for d in dbs if d not in bad))
           ')
+            read -ra found <<<"$candidates"
+            # The exclusion filters what `auto` discovered, never a name the caller
+            # wrote down. An explicit list is a decision, and dropping a name out
+            # of it silently is the class of failure this step exists to remove:
+            # a caller who asks for copy-test gets copy-test, or an error from
+            # click-odoo-update, but never a green deploy that skipped it.
+            for db in "${found[@]}"; do
+              if [[ "$db" =~ $upgrade_exclude_regex ]]; then
+                skipped+=("$db")
+              else
+                databases+=("$db")
+              fi
+            done
           else
-            candidates="$upgrade_databases"
+            read -ra databases <<<"$upgrade_databases"
           fi
-
-          # read -ra splits on whitespace without globbing, so a database name is
-          # only ever a database name. An empty value yields an empty array and
-          # the loop does not run, which is the default.
-          read -ra found <<<"$candidates"
-          databases=()
-          skipped=()
-          for db in "${found[@]}"; do
-            if [[ "$db" =~ $upgrade_exclude_regex ]]; then
-              skipped+=("$db")
-            else
-              databases+=("$db")
-            fi
-          done
           if [ "${#skipped[@]}" -gt 0 ]; then
             echo "== leaving alone (matches $upgrade_exclude_regex): ${skipped[*]}"
           fi
