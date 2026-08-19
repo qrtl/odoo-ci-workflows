@@ -136,7 +136,7 @@ jobs:
           if [ "$upgrade_databases" = auto ]; then
             candidates=$(docker exec -e PYTHONPATH="$odoo_source_path" \
               -u odoo "$service_name" python3 -c '
-          import odoo
+          import odoo.tools
           odoo.tools.config.parse_config([])
           from odoo.service.db import list_dbs, list_db_incompatible
           dbs = list_dbs(force=True)
@@ -165,10 +165,10 @@ jobs:
 
           # Say which upgrader is missing rather than letting the loop exit 127
           # on the first database. click-odoo-update comes from click-odoo-contrib,
-          # which is in the 19 image and not in the older ones, so the likely
-          # cause is a caller asking for an upgrade its image cannot perform.
-          # Checked only when there is something to upgrade, so the default path
-          # never depends on the container being able to run it.
+          # which the image has to install; whether a given image does is a
+          # property of that image, so the check asks the container instead of
+          # assuming. Checked only when there is something to upgrade, so the
+          # default path never depends on the container being able to run it.
           if [ "${#databases[@]}" -gt 0 ] \
             && ! docker exec -u odoo "$service_name" \
               sh -c 'command -v click-odoo-update' >/dev/null 2>&1; then

@@ -19,8 +19,8 @@ latest branch and restarts the Odoo Docker container.
 It can also upgrade the addons whose files changed, with `click-odoo-update`,
 so a deployed data file actually reaches the database — a restart alone leaves
 views and data records at their old values. This is **off unless the caller asks
-for it**, because it needs `click-odoo-contrib` in the image and only the 19
-image carries it:
+for it**, because it needs `click-odoo-contrib` installed in the project's image
+(check that image's requirements before enabling it):
 
 | `upgrade_databases` | Effect |
 |---|---|
