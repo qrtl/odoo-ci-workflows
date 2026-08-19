@@ -163,6 +163,20 @@ jobs:
             echo "== leaving alone (matches $upgrade_exclude_regex): ${skipped[*]}"
           fi
 
+          # Say which upgrader is missing rather than letting the loop exit 127
+          # on the first database. click-odoo-update comes from click-odoo-contrib,
+          # which is in the 19 image and not in the older ones, so the likely
+          # cause is a caller asking for an upgrade its image cannot perform.
+          # Checked only when there is something to upgrade, so the default path
+          # never depends on the container being able to run it.
+          if [ "${#databases[@]}" -gt 0 ] \
+            && ! docker exec -u odoo "$service_name" \
+              sh -c 'command -v click-odoo-update' >/dev/null 2>&1; then
+            echo "click-odoo-update is not installed in $service_name:" \
+              "add click-odoo-contrib to the image, or unset upgrade_databases" >&2
+            exit 1
+          fi
+
           for db in "${databases[@]}"; do
             echo "== $db: upgrading the addons whose files changed"
             # Failure is the exit status, not the log text: a successful run

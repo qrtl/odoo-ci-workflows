@@ -16,12 +16,27 @@ repos (oca, custom, private) are merged into a single branch with embedded
 Deploys the `_git_aggregated` branch to a staging server via SSH. Pulls the
 latest branch and restarts the Odoo Docker container.
 
+It can also upgrade the addons whose files changed, with `click-odoo-update`,
+so a deployed data file actually reaches the database — a restart alone leaves
+views and data records at their old values. This is **off unless the caller asks
+for it**, because it needs `click-odoo-contrib` in the image and only the 19
+image carries it:
+
+| `upgrade_databases` | Effect |
+|---|---|
+| unset (default) | Deploy and restart only. Nothing is upgraded. |
+| `auto` | Every same-version database on the host except those matching `upgrade_exclude_regex` (default `^copy-`, the production-restored copies, which the restore job upgrades instead). |
+| `db1 db2` | Exactly those, never filtered — an explicit list is a decision. |
+
+Asking for an upgrade on an image without `click-odoo-update` fails the deploy
+with a message naming the cause, after the code is out.
+
 ## Project classification
 
 | Type | Projects | Template |
 |------|----------|----------|
 | Odoo.sh (aggregate only) | hls, kns, nsy, rbkk, thc | `caller-aggregate-only.yml` |
-| Self-hosted (aggregate + deploy) | axls, crh, fal, iai, mi7, pci, qrtl, rmm | `caller-aggregate-deploy.yml` |
+| Self-hosted (aggregate + deploy) | asx, axls, crh, fal, iai, mi7, ocj, pci, qrtl, rmm | `caller-aggregate-deploy.yml` |
 
 ## Setup: New project
 
