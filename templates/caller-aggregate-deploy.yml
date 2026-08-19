@@ -36,4 +36,9 @@ jobs:
       staging_user: <STAGING_USER>
       project_dir: "<PROJECT_DIR>"
       service_name: <SERVICE_NAME>
+      # Upgrade the addons whose files changed, on every same-version database
+      # on the host except the copy-* ones. Needs click-odoo-contrib installed
+      # in the image: remove this line if the project's image does not have it,
+      # or the deploy fails - after the code is out - saying so.
+      upgrade_databases: "auto"
     secrets: inherit
