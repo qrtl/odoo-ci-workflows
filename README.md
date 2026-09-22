@@ -31,6 +31,10 @@ for it**, because it needs `click-odoo-contrib` installed in the project's image
 Asking for an upgrade on an image without `click-odoo-update` fails the deploy
 with a message naming the cause, after the code is out.
 
+`i18n_overwrite: true` adds `--i18n-overwrite`, so a `.po` change with the same
+msgid and a new msgstr replaces the stored translation (without it Odoo only fills
+terms that have none yet). It also replaces translations edited in the UI.
+
 ## Project classification
 
 | Type | Projects | Template |

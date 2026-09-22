@@ -41,4 +41,6 @@ jobs:
       # in the image: remove this line if the project's image does not have it,
       # or the deploy fails - after the code is out - saying so.
       upgrade_databases: "auto"
+      # A .po change replaces the stored translation, UI edits included.
+      i18n_overwrite: true
     secrets: inherit
