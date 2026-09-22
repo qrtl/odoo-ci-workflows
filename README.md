@@ -31,12 +31,9 @@ for it**, because it needs `click-odoo-contrib` installed in the project's image
 Asking for an upgrade on an image without `click-odoo-update` fails the deploy
 with a message naming the cause, after the code is out.
 
-`i18n_overwrite: true` adds `--i18n-overwrite`, so a translation-only change in a
-module's `.po` (same source text, new translation) replaces what the database
-already holds. Without it Odoo only fills terms that have no translation yet, so
-such a change is silently kept at the old value while a source-text change does
-land. It also replaces translations edited in the UI, which on staging is usually
-what you want. Has no effect unless `upgrade_databases` is set.
+`i18n_overwrite: true` adds `--i18n-overwrite`, so a `.po` change with the same
+msgid and a new msgstr replaces the stored translation (without it Odoo only fills
+terms that have none yet). It also replaces translations edited in the UI.
 
 ## Project classification
 

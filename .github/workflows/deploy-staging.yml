@@ -49,12 +49,10 @@ on:
         default: "^copy-"
       i18n_overwrite:
         description: >
-          Pass --i18n-overwrite to click-odoo-update. Without it Odoo only fills
-          terms that have no translation yet, so a changed source text gets its
-          new translation but a translation-only change to a .po (same msgid,
-          new msgstr) is silently kept at the old value. Off by default because
-          it also replaces translations edited in the UI; on a staging database
-          that is usually the point. Only matters with upgrade_databases set.
+          Run click-odoo-update with --i18n-overwrite, so a .po change with the
+          same msgid and a new msgstr replaces the stored translation. Without
+          it Odoo only fills terms that have no translation yet. Also replaces
+          translations edited in the UI.
         type: boolean
         default: false
       odoo_source_path:
@@ -189,7 +187,6 @@ jobs:
             exit 1
           fi
 
-          # A boolean input arrives as the string true or false.
           update_args=(--ignore-core-addons --watcher-max-seconds 30 --logfile=/dev/stdout)
           if [ "$i18n_overwrite" = true ]; then
             update_args+=(--i18n-overwrite)
