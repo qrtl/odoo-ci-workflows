@@ -47,6 +47,16 @@ on:
           files, ir.cron among them.
         type: string
         default: "^copy-"
+      i18n_overwrite:
+        description: >
+          Pass --i18n-overwrite to click-odoo-update. Without it Odoo only fills
+          terms that have no translation yet, so a changed source text gets its
+          new translation but a translation-only change to a .po (same msgid,
+          new msgstr) is silently kept at the old value. Off by default because
+          it also replaces translations edited in the UI; on a staging database
+          that is usually the point. Only matters with upgrade_databases set.
+        type: boolean
+        default: false
       odoo_source_path:
         description: >
           Path to the Odoo source inside the container, exported as PYTHONPATH:
@@ -87,6 +97,7 @@ jobs:
           DEPLOY_BRANCH: ${{ inputs.deploy_branch }}
           UPGRADE_DATABASES: ${{ inputs.upgrade_databases }}
           UPGRADE_EXCLUDE_REGEX: ${{ inputs.upgrade_exclude_regex }}
+          I18N_OVERWRITE: ${{ inputs.i18n_overwrite }}
           ODOO_SOURCE_PATH: ${{ inputs.odoo_source_path }}
         run: |
           {
@@ -95,6 +106,7 @@ jobs:
             printf 'deploy_branch=%q\n'     "$DEPLOY_BRANCH"
             printf 'upgrade_databases=%q\n' "$UPGRADE_DATABASES"
             printf 'upgrade_exclude_regex=%q\n' "$UPGRADE_EXCLUDE_REGEX"
+            printf 'i18n_overwrite=%q\n'    "$I18N_OVERWRITE"
             printf 'odoo_source_path=%q\n'  "$ODOO_SOURCE_PATH"
             cat <<'REMOTE'
           set -e
@@ -177,6 +189,12 @@ jobs:
             exit 1
           fi
 
+          # A boolean input arrives as the string true or false.
+          update_args=(--ignore-core-addons --watcher-max-seconds 30 --logfile=/dev/stdout)
+          if [ "$i18n_overwrite" = true ]; then
+            update_args+=(--i18n-overwrite)
+          fi
+
           for db in "${databases[@]}"; do
             echo "== $db: upgrading the addons whose files changed"
             # Failure is the exit status, not the log text: a successful run
@@ -184,8 +202,7 @@ jobs:
             # back to stdout, which is what it is being asked to do.
             docker exec -e PYTHONPATH="$odoo_source_path" \
               -u odoo "$service_name" \
-              click-odoo-update -d "$db" --ignore-core-addons \
-                --watcher-max-seconds 30 --logfile=/dev/stdout
+              click-odoo-update -d "$db" "${update_args[@]}"
           done
           echo "Deploy complete"
           REMOTE
