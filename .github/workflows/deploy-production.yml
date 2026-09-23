@@ -122,12 +122,12 @@ jobs:
           I18N: ${{ inputs.i18n_overwrite }}
         run: |
           python3 - <<'PY' >> "$GITHUB_OUTPUT"
-          import json, os, re, sys
+          import json, os, re, sys, yaml
           sha, dbs, i18n = os.environ["SHA"], set(os.environ["DBS"].split()), os.environ["I18N"] == "true"
           if not re.fullmatch(r"[0-9a-f]{40}", sha): sys.exit(f"sha must be a full commit id, got {sha!r}")
           if not dbs or "auto" in dbs: sys.exit("upgrade_databases must name every production database; auto is refused")
-          if re.search(r"^\s*-\s*\S+\s+refs/pull/", open("recipe.yml").read(), re.M):
-              sys.exit("the candidate was built with an uncommented refs/pull line: merge or drop it and aggregate again")
+          if any("refs/pull/" in str(m) for r in (yaml.safe_load(open("recipe.yml")) or {}).values() for m in (r.get("merges") or [])):
+              sys.exit("the candidate was built with a refs/pull merge: merge or drop it and aggregate again")
           rec, last = json.load(open("record.json")), json.load(open("last_deploy.json"))
           def out(k, v): print(f"{k}={v}")
           out("last_sha", last.get("sha", ""))
@@ -204,13 +204,19 @@ jobs:
             exit 0
           fi
           [ "$host_last" = "$LAST_SHA" ] || { echo "the host's last deploy is ${host_last:-none}, the gate saw ${LAST_SHA:-none}: production moved while this run waited, or that deploy's tag was never created (promote ${host_last:-it} again to create it)" >&2; exit 1; }
+          # A marker left from step 5 means a promotion was interrupted: only retrying
+          # it, or rolling back, may proceed.
+          pending=$(cat /odoo/promotion.pending 2>/dev/null || true)
+          if [ -n "$pending" ] && [ "$pending" != "$host_last" ] && [ "$SHA" != "$pending" ] && [ "$SHA" != "$LAST_SHA" ]; then
+            echo "a promotion of $pending was interrupted: promote it again${LAST_SHA:+, or roll back to $LAST_SHA}" >&2; exit 1
+          fi
           image_id=$(docker inspect --format '{{.Image}}' "$SERVICE")
           [ "$image_id" = "$EXPECTED_IMAGE_ID" ] || { echo "production runs image $image_id, the rehearsal ran under $EXPECTED_IMAGE_ID: promote the image first" >&2; exit 1; }
           sudo -n -u odoo git -C "$PROJECT_DIR" fetch -q origin "$SHA"
-          # A checkout away from the last deploy means a promotion was interrupted
-          # after its reset: only a rollback to that deploy may proceed from here.
-          if [ -n "$LAST_SHA" ] && [ "$SHA" != "$LAST_SHA" ] && [ "$current" != "$LAST_SHA" ]; then
-            echo "checkout is at $current, not the last deploy $LAST_SHA: a promotion was interrupted; promote $LAST_SHA (rollback) first" >&2; exit 1
+          # A checkout at neither the last deploy nor the candidate was moved by hand:
+          # only a rollback, or a retry of that very commit, may proceed from here.
+          if [ -n "$LAST_SHA" ] && [ "$SHA" != "$LAST_SHA" ] && [ "$current" != "$LAST_SHA" ] && [ "$current" != "$SHA" ]; then
+            echo "checkout is at $current, neither the last deploy $LAST_SHA nor $SHA: roll back to $LAST_SHA first" >&2; exit 1
           fi
           echo "== production at $current, promoting $SHA"
 
@@ -226,6 +232,7 @@ jobs:
 
           # 5. Stop, then reset: the tree is bind-mounted, so a live reset serves a half-updated tree.
           echo "== stop and reset"
+          printf '%s\n' "$SHA" | sudo -n tee /odoo/promotion.pending >/dev/null
           docker stop "$SERVICE"
           sudo -n -u odoo git -C "$PROJECT_DIR" reset -q --hard "$SHA"
 
@@ -255,6 +262,7 @@ jobs:
           record=$(printf '{"sha":"%s","image":"%s","image_id":"%s","databases":"%s","timestamp":"%s"}' \
             "$SHA" "$(docker inspect --format '{{.Config.Image}}' "$SERVICE")" "$image_id" "$DBS" "$ts")
           printf '%s\n' "$record" | sudo -n tee /odoo/last_deploy.json >/dev/null
+          sudo -n rm -f /odoo/promotion.pending
           echo "DEPLOY_RECORD=$record"
           echo "== deployed $SHA"
           REMOTE
