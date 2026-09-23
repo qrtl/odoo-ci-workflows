@@ -46,13 +46,19 @@ Caller: `templates/caller-rehearse.yml`.
 
 ### deploy-production.yml
 
-Promotes one aggregated commit to production, behind the caller repo's
-`production` environment. A **gate** job (no approval) refuses unless the last
+Promotes one aggregated commit to production. A private repo's `production`
+environment holds the SSH key but cannot require reviewers below the Enterprise
+plan, and an environment without rules releases its secrets to any job in the
+repo that names it. So the caller repo limits the environment to the
+`aggregate-config` branch, protects that branch so only promoters push it, and
+the caller job runs only when both `github.actor` and `github.triggering_actor`
+(a rerun keeps the original dispatcher as the former) are listed promoters: the
+dispatch is the approval. A **gate** job refuses unless the last
 rehearsal record names the commit with a clean result, its backup postdates the
 current deploy, it covered exactly the requested databases with the requested
 translation flag, and the commit's own `repos.yml` has no uncommented
 `refs/pull/N/head` line. The previous deploy's commit is accepted as a rollback
-without a fresh rehearsal. The **deploy** job (approved) then, on the host: takes
+without a fresh rehearsal. The **deploy** job then, on the host: takes
 the shared lock, checks the running image is the one rehearsed under, fetches the
 commit, runs the pre-update backup, prints the preview (`dry_run` stops here;
 `republish` only recreates the tag of a commit already deployed, when its run lost that step),
@@ -133,7 +139,7 @@ For projects already using aggregate-config (rbkk-private, hls-repos):
 |--------|-------|---------|
 | `GITHUB_TOKEN` | Auto-provided | Pushing to `_git_aggregated` within the same repo |
 | `STAGING_SSH_KEY` | Org-level | SSH private key for deploy to staging servers |
-| `PRODUCTION_SSH_KEY` | Repo `production` environment | SSH private key for the promotion; released only to an approved job |
+| `PRODUCTION_SSH_KEY` | Repo `production` environment | SSH private key for the promotion; released only to that environment's jobs |
 
 ### SSH key setup
 
