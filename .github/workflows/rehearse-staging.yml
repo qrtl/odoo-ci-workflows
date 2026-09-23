@@ -62,7 +62,7 @@ jobs:
         env:
           EXPECTED: ${{ inputs.expected_sha }}
         run: |
-          head=$($SSH "sudo -n git -C ${{ inputs.project_dir }} rev-parse HEAD")
+          head=$($SSH "sudo -n -u odoo git -C ${{ inputs.project_dir }} rev-parse HEAD")
           [ "$head" = "$EXPECTED" ] || { echo "staging is at $head, not $EXPECTED" >&2; exit 1; }
 
       # The script takes the host lock, restores, upgrades and writes the record.
@@ -72,6 +72,8 @@ jobs:
 
       - name: Read the record
         id: record
+        env:
+          EXPECTED: ${{ inputs.expected_sha }}
         run: |
           $SSH "cat ${{ inputs.restore_dir }}/last_rehearsal.json" > record.json
           python3 - <<'PY' >> "$GITHUB_OUTPUT"
@@ -82,6 +84,9 @@ jobs:
               raise SystemExit(f"rehearsal failed: exit {r['exit_code']}")
           if not commit or commit.endswith("-dirty"):
               raise SystemExit(f"no clean commit recorded: {commit or 'not a git checkout'}")
+          # The record is written under the host lock; the pre-check above was not.
+          if os.environ["EXPECTED"] and commit != os.environ["EXPECTED"]:
+              raise SystemExit(f"rehearsed {commit}, not {os.environ['EXPECTED']}: staging was deployed after the check")
           print(f"commit={commit}")
           rows = "\n".join(f"| {d['source']} | {d['copy']} | {d['upgrade_tool']} | {', '.join(d['modules_upgraded']) or '(none)'} | {d['rc']} |" for d in r["databases"])
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:

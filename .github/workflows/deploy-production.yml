@@ -201,6 +201,11 @@ jobs:
           [ "$image_id" = "$EXPECTED_IMAGE_ID" ] || { echo "production runs image $image_id, the rehearsal ran under $EXPECTED_IMAGE_ID: promote the image first" >&2; exit 1; }
           sudo -n -u odoo git -C "$PROJECT_DIR" fetch -q origin "$SHA"
           current=$(sudo -n -u odoo git -C "$PROJECT_DIR" rev-parse HEAD)
+          # A checkout away from the last deploy means a promotion was interrupted
+          # after its reset: only a rollback to that deploy may proceed from here.
+          if [ -n "$LAST_SHA" ] && [ "$SHA" != "$LAST_SHA" ] && [ "$current" != "$LAST_SHA" ]; then
+            echo "checkout is at $current, not the last deploy $LAST_SHA: a promotion was interrupted; promote $LAST_SHA (rollback) first" >&2; exit 1
+          fi
           echo "== production at $current, promoting $SHA"
 
           # 3. Pre-update backup, inside our lock (the script would otherwise wait on itself).
