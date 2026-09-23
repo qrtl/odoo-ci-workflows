@@ -39,6 +39,7 @@ jobs:
       # Must equal upgrade_i18n_overwrite in the staging host's restore.conf.
       i18n_overwrite: true
       dry_run: ${{ inputs.dry_run }}
+      # project_dir: /odoo/code/addons  # if the production checkout lives elsewhere
     secrets: inherit
     permissions:
       contents: write

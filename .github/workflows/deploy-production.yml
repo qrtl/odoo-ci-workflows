@@ -204,11 +204,19 @@ jobs:
             exit 0
           fi
           [ "$host_last" = "$LAST_SHA" ] || { echo "the host's last deploy is ${host_last:-none}, the gate saw ${LAST_SHA:-none}: production moved while this run waited, or that deploy's tag was never created (promote ${host_last:-it} again to create it)" >&2; exit 1; }
-          # A marker left from step 5 means a promotion was interrupted: only retrying
-          # it, or rolling back, may proceed.
-          pending=$(cat /odoo/promotion.pending 2>/dev/null || true)
-          if [ -n "$pending" ] && [ "$pending" != "$host_last" ] && [ "$SHA" != "$pending" ] && [ "$SHA" != "$LAST_SHA" ]; then
-            echo "a promotion of $pending was interrupted: promote it again${LAST_SHA:+, or roll back to $LAST_SHA}" >&2; exit 1
+          # A marker left from step 5 means a promotion was interrupted: retry it, or
+          # roll back the code if no database upgrade had begun. Once one had, old
+          # code cannot undo a migration: the data comes back from the backup first.
+          pending=$(cat /odoo/promotion.pending 2>/dev/null || true)   # "<sha>", then "<sha> upgrading"
+          p_sha=${pending%% *}
+          if [ -n "$p_sha" ] && [ "$p_sha" != "$host_last" ] && [ "$p_sha" != "$SHA" ]; then
+            if [ "$SHA" = "$LAST_SHA" ] && [ "$pending" = "$p_sha" ]; then
+              echo "== rolling back the interrupted promotion of $p_sha; no database upgrade had begun"
+            elif [ "$SHA" = "$LAST_SHA" ]; then
+              echo "the interrupted promotion of $p_sha had begun upgrading databases: restore the pre-update backup (restore_production.sh) before promoting again" >&2; exit 1
+            else
+              echo "a promotion of $p_sha was interrupted: promote it again${LAST_SHA:+, or roll back to $LAST_SHA}" >&2; exit 1
+            fi
           fi
           image_id=$(docker inspect --format '{{.Image}}' "$SERVICE")
           [ "$image_id" = "$EXPECTED_IMAGE_ID" ] || { echo "production runs image $image_id, the rehearsal ran under $EXPECTED_IMAGE_ID: promote the image first" >&2; exit 1; }
@@ -239,6 +247,7 @@ jobs:
           # 6. Upgrade every database in a one-off container from the same image and
           #    volumes, with the service still stopped, so no request meets new code
           #    on an old schema.
+          printf '%s upgrading\n' "$SHA" | sudo -n tee /odoo/promotion.pending >/dev/null
           args=(--ignore-core-addons --watcher-max-seconds 30 --logfile=/dev/stdout)
           [ "$I18N" = true ] && args+=(--i18n-overwrite)
           for db in $DBS; do
