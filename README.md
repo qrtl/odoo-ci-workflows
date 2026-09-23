@@ -51,8 +51,9 @@ environment holds the SSH key but cannot require reviewers below the Enterprise
 plan, and an environment without rules releases its secrets to any job in the
 repo that names it. So the caller repo limits the environment to the
 `aggregate-config` branch, protects that branch so only promoters push it, and
-the caller job runs only for a listed dispatcher (`if: contains(..., github.actor)`
-in the template): the dispatch is the approval. A **gate** job refuses unless the last
+the caller job runs only when both `github.actor` and `github.triggering_actor`
+(a rerun keeps the original dispatcher as the former) are listed promoters: the
+dispatch is the approval. A **gate** job refuses unless the last
 rehearsal record names the commit with a clean result, its backup postdates the
 current deploy, it covered exactly the requested databases with the requested
 translation flag, and the commit's own `repos.yml` has no uncommented

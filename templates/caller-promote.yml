@@ -7,7 +7,7 @@
 # Enterprise plan, so three settings keep the key to the promoters: the
 # environment's branch policy releases it only to runs from aggregate-config,
 # branch protection lets only promoters push that branch, and the `if` below
-# lets only them dispatch. Replace all <PLACEHOLDER> values before use.
+# lets only them dispatch or rerun. Replace all <PLACEHOLDER> values before use.
 
 name: Promote to production
 
@@ -32,7 +32,8 @@ on:
 
 jobs:
   promote:
-    if: contains(fromJSON('["<PROMOTER_LOGIN>"]'), github.actor)
+    # triggering_actor: a rerun keeps the original dispatcher as github.actor.
+    if: contains(fromJSON('["<PROMOTER_LOGIN>"]'), github.actor) && contains(fromJSON('["<PROMOTER_LOGIN>"]'), github.triggering_actor)
     uses: qrtl/odoo-ci-workflows/.github/workflows/deploy-production.yml@main
     with:
       production_host: "<PRODUCTION_HOST>"
