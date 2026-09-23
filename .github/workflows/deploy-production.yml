@@ -84,6 +84,7 @@ jobs:
       expected_image_id: ${{ steps.check.outputs.expected_image_id }}
       modules: ${{ steps.check.outputs.modules }}
       rollback: ${{ steps.check.outputs.rollback }}
+      last_sha: ${{ steps.check.outputs.last_sha }}
     steps:
       - name: Read the rehearsal record from staging
         run: |
@@ -99,7 +100,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          last=$(gh api "repos/${{ github.repository }}/git/matching-refs/tags/prod/${{ inputs.host_name }}/" --jq '.[-1].object.sha // empty')
+          last=$(gh api --paginate "repos/${{ github.repository }}/git/matching-refs/tags/prod/${{ inputs.host_name }}/" --jq '.[].object.sha' | tail -n 1)
           if [ -n "$last" ]; then
             gh api "repos/${{ github.repository }}/git/tags/$last" --jq '.message' > last_deploy.json
           else
@@ -129,13 +130,16 @@ jobs:
               sys.exit("the candidate was built with an uncommented refs/pull line: merge or drop it and aggregate again")
           rec, last = json.load(open("record.json")), json.load(open("last_deploy.json"))
           def out(k, v): print(f"{k}={v}")
+          out("last_sha", last.get("sha", ""))
           if last and sha == last.get("sha"):
+              if dbs != set(last["databases"].split()): sys.exit(f"a rollback upgrades the databases that deploy did ({last['databases']}), not {' '.join(sorted(dbs))}")
               out("rollback", "true"); out("expected_image_id", last["image_id"]); out("modules", "(rollback to the previous deploy)")
               sys.exit(0)
           fail = []
           if rec.get("commit") != sha: fail.append(f"last rehearsal was of {rec.get('commit')}, not {sha}: run Rehearse first")
           if rec.get("result") != "ok": fail.append(f"last rehearsal failed (exit {rec.get('exit_code')})")
           m = re.search(r"(\d{4}_\d{2}_\d{2}_\d{2}_\d{2}_\d{2})", rec.get("backup") or "")
+          if last and not m: fail.append(f"rehearsal record names no backup timestamp ({rec.get('backup')!r}): cannot tell whether it postdates the current deploy")
           if last and m and m.group(1) <= last.get("timestamp", ""):
               fail.append(f"rehearsal backup {m.group(1)} predates the current deploy {last['timestamp']}: wait for the next backup, then Rehearse")
           rehearsed = {d["source"] for d in rec.get("databases", [])}
@@ -167,6 +171,7 @@ jobs:
           I18N: ${{ inputs.i18n_overwrite }}
           DRY_RUN: ${{ inputs.dry_run }}
           EXPECTED_IMAGE_ID: ${{ needs.gate.outputs.expected_image_id }}
+          LAST_SHA: ${{ needs.gate.outputs.last_sha }}
           MODULES: ${{ needs.gate.outputs.modules }}
           PROJECT_DIR: ${{ inputs.project_dir }}
           SERVICE: ${{ inputs.service_name }}
@@ -175,7 +180,7 @@ jobs:
           HTTP_PORT: ${{ inputs.http_port }}
         run: |
           {
-            for v in SHA DBS I18N DRY_RUN EXPECTED_IMAGE_ID MODULES PROJECT_DIR SERVICE SRC BACKUP HTTP_PORT; do
+            for v in SHA DBS I18N DRY_RUN EXPECTED_IMAGE_ID LAST_SHA MODULES PROJECT_DIR SERVICE SRC BACKUP HTTP_PORT; do
               printf '%s=%q\n' "$v" "${!v}"
             done
             cat <<'REMOTE'
@@ -186,8 +191,12 @@ jobs:
           exec 200<"$LOCKFILE"
           flock -w 1800 200 || { echo "host lock held for 30 minutes; giving up" >&2; exit 1; }
 
-          # 2. Under the lock: the image the rehearsal ran under is the one running,
+          # 2. Under the lock: production is still at the deploy the gate judged
+          #    against (another promotion may have landed while this one waited
+          #    for approval), the image the rehearsal ran under is the one running,
           #    and the candidate is fetchable. Fetching changes nothing checked out.
+          host_last=$(sed -n 's/.*"sha":"\([0-9a-f]*\)".*/\1/p' /odoo/last_deploy.json 2>/dev/null || true)
+          [ "$host_last" = "$LAST_SHA" ] || { echo "the host's last deploy is ${host_last:-none}, the gate saw ${LAST_SHA:-none}: production moved while this run waited, or a deploy went untagged; dispatch again" >&2; exit 1; }
           image_id=$(docker inspect --format '{{.Image}}' "$SERVICE")
           [ "$image_id" = "$EXPECTED_IMAGE_ID" ] || { echo "production runs image $image_id, the rehearsal ran under $EXPECTED_IMAGE_ID: promote the image first" >&2; exit 1; }
           sudo -n -u odoo git -C "$PROJECT_DIR" fetch -q origin "$SHA"

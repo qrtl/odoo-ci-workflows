@@ -30,6 +30,10 @@ on:
       restore_dir:
         type: string
         default: /opt/odoo_restore
+      project_dir:
+        description: The checkout the copy is upgraded against (restore.sh's code_dir).
+        type: string
+        default: /odoo/code/addons
     outputs:
       commit:
         description: The commit the copy was upgraded against.
@@ -58,7 +62,7 @@ jobs:
         env:
           EXPECTED: ${{ inputs.expected_sha }}
         run: |
-          head=$($SSH "sudo -n git -C /odoo/code/addons rev-parse HEAD")
+          head=$($SSH "sudo -n git -C ${{ inputs.project_dir }} rev-parse HEAD")
           [ "$head" = "$EXPECTED" ] || { echo "staging is at $head, not $EXPECTED" >&2; exit 1; }
 
       # The script takes the host lock, restores, upgrades and writes the record.

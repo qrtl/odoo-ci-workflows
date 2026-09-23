@@ -25,6 +25,7 @@ jobs:
       staging_user: <STAGING_USER>
       host_name: <PROJECT>-stag
       expected_sha: ${{ inputs.expected_sha }}
+      # project_dir: /odoo/code/addons  # if the staging checkout lives elsewhere
     secrets: inherit
     permissions:
       contents: write
