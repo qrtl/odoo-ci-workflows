@@ -129,7 +129,9 @@ jobs:
           if any("refs/pull/" in str(m) for r in (yaml.safe_load(open("recipe.yml")) or {}).values() for m in (r.get("merges") or [])):
               sys.exit("the candidate was built with a refs/pull merge: merge or drop it and aggregate again")
           rec, last = json.load(open("record.json")), json.load(open("last_deploy.json"))
-          def out(k, v): print(f"{k}={v}")
+          def out(k, v):
+              if re.search(r"[\x00-\x1f\x7f]", str(v)): sys.exit(f"{k} from the record contains control characters")
+              print(f"{k}={v}")
           out("last_sha", last.get("sha", ""))
           if last and sha == last.get("sha"):
               if dbs != set(last["databases"].split()): sys.exit(f"a rollback upgrades the databases that deploy did ({last['databases']}), not {' '.join(sorted(dbs))}")
@@ -197,19 +199,19 @@ jobs:
           #    and the candidate is fetchable. Fetching changes nothing checked out.
           host_last=$(sed -n 's/.*"sha":"\([0-9a-f]*\)".*/\1/p' /odoo/last_deploy.json 2>/dev/null || true)
           current=$(sudo -n -u odoo git -C "$PROJECT_DIR" rev-parse HEAD)
-          # Already deployed here but its tag never landed: republish the record.
-          if [ "$host_last" = "$SHA" ] && [ "$current" = "$SHA" ]; then
+          pending=$(cat /odoo/promotion.pending 2>/dev/null || true)   # step 5's "<sha>", then "<sha> upgrading"
+          p_sha=${pending%% *}
+          # Deployed here in full but its tag never landed: republish the record.
+          if [ -z "$pending" ] && [ "$host_last" = "$SHA" ] && [ "$current" = "$SHA" ]; then
             echo "== $SHA is already deployed here; republishing its record"
             [ "$DRY_RUN" = true ] || echo "DEPLOY_RECORD=$(cat /odoo/last_deploy.json)"
             exit 0
           fi
           [ "$host_last" = "$LAST_SHA" ] || { echo "the host's last deploy is ${host_last:-none}, the gate saw ${LAST_SHA:-none}: production moved while this run waited, or that deploy's tag was never created (promote ${host_last:-it} again to create it)" >&2; exit 1; }
-          # A marker left from step 5 means a promotion was interrupted: retry it, or
-          # roll back the code if no database upgrade had begun. Once one had, old
-          # code cannot undo a migration: the data comes back from the backup first.
-          pending=$(cat /odoo/promotion.pending 2>/dev/null || true)   # "<sha>", then "<sha> upgrading"
-          p_sha=${pending%% *}
-          if [ -n "$p_sha" ] && [ "$p_sha" != "$host_last" ] && [ "$p_sha" != "$SHA" ]; then
+          # A marker means a promotion was interrupted: retry it, or roll back the
+          # code if no database upgrade had begun. Once one had, old code cannot
+          # undo a migration: the data comes back from the backup first.
+          if [ -n "$p_sha" ] && [ "$p_sha" != "$SHA" ]; then
             if [ "$SHA" = "$LAST_SHA" ] && [ "$pending" = "$p_sha" ]; then
               echo "== rolling back the interrupted promotion of $p_sha; no database upgrade had begun"
             elif [ "$SHA" = "$LAST_SHA" ]; then
