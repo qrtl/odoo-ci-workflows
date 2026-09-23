@@ -201,8 +201,10 @@ jobs:
           current=$(sudo -n -u odoo git -C "$PROJECT_DIR" rev-parse HEAD)
           pending=$(cat /odoo/promotion.pending 2>/dev/null || true)   # step 5's "<sha>", then "<sha> upgrading"
           p_sha=${pending%% *}
-          # Deployed here in full but its tag never landed: republish the record.
-          if [ -z "$pending" ] && [ "$host_last" = "$SHA" ] && [ "$current" = "$SHA" ]; then
+          # Deployed here in full but its tag never landed: republish the record. A
+          # marker older than the record is one the run did not live to remove.
+          if [ "$host_last" = "$SHA" ] && [ "$current" = "$SHA" ] && { [ -z "$pending" ] || [ /odoo/last_deploy.json -nt /odoo/promotion.pending ]; }; then
+            sudo -n rm -f /odoo/promotion.pending
             echo "== $SHA is already deployed here; republishing its record"
             [ "$DRY_RUN" = true ] || echo "DEPLOY_RECORD=$(cat /odoo/last_deploy.json)"
             exit 0
