@@ -292,7 +292,8 @@ jobs:
           ts=$(date +%Y_%m_%d_%H_%M_%S)
           record=$(printf '{"sha":"%s","image":"%s","image_id":"%s","databases":"%s","timestamp":"%s"}' \
             "$SHA" "$(docker inspect --format '{{.Config.Image}}' "$SERVICE")" "$image_id" "$DBS" "$ts")
-          printf '%s\n' "$record" | sudo -n tee /odoo/last_deploy.json >/dev/null
+          printf '%s\n' "$record" | sudo -n tee /odoo/last_deploy.json.tmp >/dev/null
+          sudo -n mv -f /odoo/last_deploy.json.tmp /odoo/last_deploy.json   # atomic: a failed write keeps the previous record
           sudo -n rm -f /odoo/promotion.pending
           echo "DEPLOY_RECORD=$record"
           echo "== deployed $SHA"
