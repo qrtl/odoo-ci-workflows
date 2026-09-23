@@ -50,6 +50,10 @@ on:
         description: Stop after the backup and the preview; change nothing.
         type: boolean
         default: false
+      republish:
+        description: Only publish the tag of a commit already deployed here, whose run lost its tag step. No rehearsal is checked; nothing is deployed.
+        type: boolean
+        default: false
       environment:
         type: string
         default: production
@@ -104,7 +108,7 @@ jobs:
 
       # A rollback redeploys the last deploy and needs no rehearsal: staging may be down.
       - name: Read the rehearsal record from staging
-        if: steps.last.outputs.sha != inputs.sha
+        if: steps.last.outputs.sha != inputs.sha && !inputs.republish
         run: |
           printf '%s\n' "${{ secrets.STAGING_SSH_KEY }}" > .staging_key && chmod 600 .staging_key
           ssh -i .staging_key -p "${{ inputs.staging_port }}" -o StrictHostKeyChecking=accept-new \
@@ -127,6 +131,7 @@ jobs:
           SHA: ${{ inputs.sha }}
           DBS: ${{ inputs.upgrade_databases }}
           I18N: ${{ inputs.i18n_overwrite }}
+          REPUBLISH: ${{ inputs.republish }}
         run: |
           python3 -c 'import yaml' 2>/dev/null || pip install -q pyyaml
           python3 - <<'PY' >> "$GITHUB_OUTPUT"
@@ -142,6 +147,8 @@ jobs:
               if re.search(r"[\x00-\x1f\x7f]", str(v)): sys.exit(f"{k} from the record contains control characters")
               print(f"{k}={v}")
           out("last_sha", last.get("sha", ""))
+          if os.environ["REPUBLISH"] == "true":
+              out("rollback", "false"); out("expected_image_id", ""); out("modules", "(republish of a deploy that lost its tag)"); sys.exit(0)
           if last and sha == last.get("sha"):
               if dbs != set(last["databases"].split()): sys.exit(f"a rollback upgrades the databases that deploy did ({last['databases']}), not {' '.join(sorted(dbs))}")
               out("rollback", "true"); out("expected_image_id", last["image_id"]); out("modules", "(rollback to the previous deploy)")
@@ -181,6 +188,7 @@ jobs:
           DBS: ${{ inputs.upgrade_databases }}
           I18N: ${{ inputs.i18n_overwrite }}
           DRY_RUN: ${{ inputs.dry_run }}
+          REPUBLISH: ${{ inputs.republish }}
           EXPECTED_IMAGE_ID: ${{ needs.gate.outputs.expected_image_id }}
           LAST_SHA: ${{ needs.gate.outputs.last_sha }}
           MODULES: ${{ needs.gate.outputs.modules }}
@@ -191,7 +199,7 @@ jobs:
           HTTP_PORT: ${{ inputs.http_port }}
         run: |
           {
-            for v in SHA DBS I18N DRY_RUN EXPECTED_IMAGE_ID LAST_SHA MODULES PROJECT_DIR SERVICE SRC BACKUP HTTP_PORT; do
+            for v in SHA DBS I18N DRY_RUN REPUBLISH EXPECTED_IMAGE_ID LAST_SHA MODULES PROJECT_DIR SERVICE SRC BACKUP HTTP_PORT; do
               printf '%s=%q\n' "$v" "${!v}"
             done
             cat <<'REMOTE'
@@ -218,6 +226,7 @@ jobs:
             [ "$DRY_RUN" = true ] || echo "DEPLOY_RECORD=$(cat /odoo/last_deploy.json)"
             exit 0
           fi
+          [ "$REPUBLISH" != true ] || { echo "republish refused: $SHA is not deployed here in full (last deploy ${host_last:-none}, checkout at $current${pending:+, promotion of $p_sha pending})" >&2; exit 1; }
           [ "$host_last" = "$LAST_SHA" ] || { echo "the host's last deploy is ${host_last:-none}, the gate saw ${LAST_SHA:-none}: production moved while this run waited, or that deploy's tag was never created (promote ${host_last:-it} again to create it)" >&2; exit 1; }
           # A marker means a promotion was interrupted: retry it, or roll back the
           # code if no database upgrade had begun. Once one had, old code cannot

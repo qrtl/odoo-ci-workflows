@@ -22,6 +22,10 @@ on:
         description: Stop after the backup and the preview; change nothing
         type: boolean
         default: false
+      republish:
+        description: Only publish the tag of a commit already deployed, whose run lost its tag step
+        type: boolean
+        default: false
 
 jobs:
   promote:
@@ -39,6 +43,7 @@ jobs:
       # Must equal upgrade_i18n_overwrite in the staging host's restore.conf.
       i18n_overwrite: true
       dry_run: ${{ inputs.dry_run }}
+      republish: ${{ inputs.republish }}
       # project_dir: /odoo/code/addons  # if the production checkout lives elsewhere
     secrets: inherit
     permissions:

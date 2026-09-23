@@ -54,7 +54,8 @@ translation flag, and the commit's own `repos.yml` has no uncommented
 `refs/pull/N/head` line. The previous deploy's commit is accepted as a rollback
 without a fresh rehearsal. The **deploy** job (approved) then, on the host: takes
 the shared lock, checks the running image is the one rehearsed under, fetches the
-commit, runs the pre-update backup, prints the preview (`dry_run` stops here),
+commit, runs the pre-update backup, prints the preview (`dry_run` stops here;
+`republish` only recreates the tag of a commit already deployed, when its run lost that step),
 stops Odoo, resets the checkout, upgrades every database in a one-off container,
 starts Odoo, and records the deploy on the host and as an annotated tag
 `prod/<host>/<time>`. Caller: `templates/caller-promote.yml`. Design and
