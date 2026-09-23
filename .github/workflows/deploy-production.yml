@@ -1,9 +1,9 @@
 name: Promote to production
 
 # Deploys one aggregated commit that the copy database has rehearsed, behind
-# the caller's `production` environment. The gate job checks the rehearsal
-# record against the request and the candidate's recipe; the deploy job, once
-# approved, takes a pre-update backup, previews, stops Odoo, resets the checkout
+# the caller's `production` environment, whose caller limits who may dispatch.
+# The gate job checks the rehearsal record against the request and the
+# candidate's recipe; the deploy job takes a pre-update backup, previews, stops Odoo, resets the checkout
 # to the exact commit, upgrades every database in a one-off container, starts
 # Odoo and records the deploy as a `prod/<host>/<time>` tag.
 # See odoo-ansible plans/production-deploy-promotion.md.
@@ -212,7 +212,7 @@ jobs:
 
           # 2. Under the lock: production is still at the deploy the gate judged
           #    against (another promotion may have landed while this one waited
-          #    for approval), the image the rehearsal ran under is the one running,
+          #    for the lock), the image the rehearsal ran under is the one running,
           #    and the candidate is fetchable. Fetching changes nothing checked out.
           host_last=$(sed -n 's/.*"sha":"\([0-9a-f]*\)".*/\1/p' /odoo/last_deploy.json 2>/dev/null || true)
           current=$(sudo -n -u odoo git -C "$PROJECT_DIR" rev-parse HEAD)
