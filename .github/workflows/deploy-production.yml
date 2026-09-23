@@ -288,18 +288,26 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RECORD: ${{ steps.promote.outputs.record }}
+          HOST: ${{ inputs.host_name }}
+          SHA: ${{ inputs.sha }}
+          DBS: ${{ inputs.upgrade_databases }}
+          MODULES: ${{ needs.gate.outputs.modules }}
         run: |
           ts=$(python3 -c 'import json,os;print(json.loads(os.environ["RECORD"])["timestamp"])')
-          tag="prod/${{ inputs.host_name }}/$ts"
-          obj=$(gh api "repos/${{ github.repository }}/git/tags" -f tag="$tag" -f message="$RECORD" -f object="${{ inputs.sha }}" -f type=commit --jq .sha)
+          tag="prod/$HOST/$ts"
+          obj=$(gh api "repos/${{ github.repository }}/git/tags" -f tag="$tag" -f message="$RECORD" -f object="$SHA" -f type=commit --jq .sha)
           gh api "repos/${{ github.repository }}/git/refs" -f ref="refs/tags/$tag" -f sha="$obj" >/dev/null \
             || gh api -X PATCH "repos/${{ github.repository }}/git/refs/tags/$tag" -f sha="$obj" >/dev/null
-          { echo "## Promoted to ${{ inputs.host_name }}"; echo; echo "- commit \`${{ inputs.sha }}\`"; echo "- databases \`${{ inputs.upgrade_databases }}\`"; echo "- modules the rehearsal upgraded: ${{ needs.gate.outputs.modules }}"; echo "- tag \`$tag\`"; } >> "$GITHUB_STEP_SUMMARY"
+          { echo "## Promoted to $HOST"; echo; echo "- commit \`$SHA\`"; echo "- databases \`$DBS\`"; echo "- modules the rehearsal upgraded: $MODULES"; echo "- tag \`$tag\`"; } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Dry-run summary
         if: inputs.dry_run
+        env:
+          HOST: ${{ inputs.host_name }}
+          SHA: ${{ inputs.sha }}
+          ROLLBACK: ${{ needs.gate.outputs.rollback }}
         run: |
-          { echo "## Dry run against ${{ inputs.host_name }}"; echo; echo "Gate passed for \`${{ inputs.sha }}\` (rollback: ${{ needs.gate.outputs.rollback }}). Backup taken, preview printed, nothing changed."; echo; echo '```'; sed -n '/^== modules/,/^== dry run/p' deploy.log; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          { echo "## Dry run against $HOST"; echo; echo "Gate passed for \`$SHA\` (rollback: $ROLLBACK). Backup taken, preview printed, nothing changed."; echo; echo '```'; sed -n '/^== modules/,/^== dry run/p' deploy.log; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Cleanup SSH key
         if: always()
