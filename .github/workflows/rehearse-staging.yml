@@ -77,12 +77,12 @@ jobs:
         run: |
           $SSH "cat ${{ inputs.restore_dir }}/last_rehearsal.json" > record.json
           python3 - <<'PY' >> "$GITHUB_OUTPUT"
-          import json, os
+          import json, os, re
           r = json.load(open("record.json"))
           commit = r.get("commit") or ""
           if r["result"] != "ok":
               raise SystemExit(f"rehearsal failed: exit {r['exit_code']}")
-          if not commit or commit.endswith("-dirty"):
+          if not re.fullmatch(r"[0-9a-f]{40}", commit):
               raise SystemExit(f"no clean commit recorded: {commit or 'not a git checkout'}")
           # The record is written under the host lock; the pre-check above was not.
           if os.environ["EXPECTED"] and commit != os.environ["EXPECTED"]:
@@ -99,9 +99,10 @@ jobs:
       - name: Tag the rehearsed commit
         env:
           GH_TOKEN: ${{ github.token }}
+          COMMIT: ${{ steps.record.outputs.commit }}
         run: |
           tag="rehearsed/${{ inputs.host_name }}/$(date -u +%Y%m%dT%H%M%SZ)"
-          gh api "repos/${{ github.repository }}/git/refs" -f ref="refs/tags/$tag" -f sha="${{ steps.record.outputs.commit }}" >/dev/null
+          gh api "repos/${{ github.repository }}/git/refs" -f ref="refs/tags/$tag" -f sha="$COMMIT" >/dev/null
           echo "tagged $tag" | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Cleanup SSH key
