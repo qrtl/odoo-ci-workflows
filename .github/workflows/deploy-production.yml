@@ -99,8 +99,9 @@ jobs:
       - name: Read the latest deploy record
         env:
           GH_TOKEN: ${{ github.token }}
+          HOST: ${{ inputs.host_name }}
         run: |
-          last=$(gh api --paginate "repos/${{ github.repository }}/git/matching-refs/tags/prod/${{ inputs.host_name }}/" --jq '.[].object.sha' | tail -n 1)
+          last=$(gh api --paginate "repos/${{ github.repository }}/git/matching-refs/tags/prod/$HOST/" --jq '.[].object.sha' | tail -n 1)
           if [ -n "$last" ]; then
             gh api "repos/${{ github.repository }}/git/tags/$last" --jq '.message' > last_deploy.json
           else
@@ -110,9 +111,11 @@ jobs:
       - name: Read the candidate's recipe
         env:
           GH_TOKEN: ${{ github.token }}
+          SHA: ${{ inputs.sha }}
         run: |
-          gh api "repos/${{ github.repository }}/contents/repos.yml?ref=${{ inputs.sha }}" --jq .content 2>/dev/null | base64 -d > recipe.yml \
-            || { echo "commit ${{ inputs.sha }} carries no repos.yml: aggregate again so the snapshot records its recipe" >&2; exit 1; }
+          [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "sha must be a full commit id, got $SHA" >&2; exit 1; }
+          gh api "repos/${{ github.repository }}/contents/repos.yml?ref=$SHA" --jq .content 2>/dev/null | base64 -d > recipe.yml \
+            || { echo "commit $SHA carries no repos.yml: aggregate again so the snapshot records its recipe" >&2; exit 1; }
 
       - name: Check the request against the record
         id: check

@@ -74,6 +74,7 @@ jobs:
         id: record
         env:
           EXPECTED: ${{ inputs.expected_sha }}
+          HOST: ${{ inputs.host_name }}
         run: |
           $SSH "cat ${{ inputs.restore_dir }}/last_rehearsal.json" > record.json
           python3 - <<'PY' >> "$GITHUB_OUTPUT"
@@ -90,7 +91,7 @@ jobs:
           print(f"commit={commit}")
           rows = "\n".join(f"| {d['source']} | {d['copy']} | {d['upgrade_tool']} | {', '.join(d['modules_upgraded']) or '(none)'} | {d['rc']} |" for d in r["databases"])
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
-              f.write(f"## Rehearsal on {r.get('host') or '${{ inputs.host_name }}'}\n\n"
+              f.write(f"## Rehearsal on {r.get('host') or os.environ['HOST']}\n\n"
                       f"- commit `{commit}`\n- backup `{r['backup']}`\n- image `{r['image']}` (`{r['image_id']}`)\n"
                       f"- i18n_overwrite `{str(r['i18n_overwrite']).lower()}`\n\n"
                       "| database | copy | tool | modules upgraded | rc |\n|---|---|---|---|---|\n" + rows + "\n")
@@ -100,8 +101,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           COMMIT: ${{ steps.record.outputs.commit }}
+          HOST: ${{ inputs.host_name }}
         run: |
-          tag="rehearsed/${{ inputs.host_name }}/$(date -u +%Y%m%dT%H%M%SZ)"
+          tag="rehearsed/$HOST/$(date -u +%Y%m%dT%H%M%SZ)"
           gh api "repos/${{ github.repository }}/git/refs" -f ref="refs/tags/$tag" -f sha="$COMMIT" >/dev/null
           echo "tagged $tag" | tee -a "$GITHUB_STEP_SUMMARY"
 
