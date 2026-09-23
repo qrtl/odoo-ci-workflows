@@ -86,17 +86,10 @@ jobs:
       rollback: ${{ steps.check.outputs.rollback }}
       last_sha: ${{ steps.check.outputs.last_sha }}
     steps:
-      - name: Read the rehearsal record from staging
-        run: |
-          printf '%s\n' "${{ secrets.STAGING_SSH_KEY }}" > .staging_key && chmod 600 .staging_key
-          ssh -i .staging_key -p "${{ inputs.staging_port }}" -o StrictHostKeyChecking=accept-new \
-            "${{ inputs.staging_user }}@${{ inputs.staging_host }}" \
-            "cat ${{ inputs.restore_dir }}/last_rehearsal.json" > record.json
-          rm -f .staging_key
-
       # The latest successful deploy, from its annotated tag: the rollback target,
       # and the baseline a forward rehearsal's backup must postdate.
       - name: Read the latest deploy record
+        id: last
         env:
           GH_TOKEN: ${{ github.token }}
           HOST: ${{ inputs.host_name }}
@@ -107,6 +100,17 @@ jobs:
           else
             echo '{}' > last_deploy.json
           fi
+          echo "sha=$(python3 -c 'import json;print(json.load(open("last_deploy.json")).get("sha",""))')" >> "$GITHUB_OUTPUT"
+
+      # A rollback redeploys the last deploy and needs no rehearsal: staging may be down.
+      - name: Read the rehearsal record from staging
+        if: steps.last.outputs.sha != inputs.sha
+        run: |
+          printf '%s\n' "${{ secrets.STAGING_SSH_KEY }}" > .staging_key && chmod 600 .staging_key
+          ssh -i .staging_key -p "${{ inputs.staging_port }}" -o StrictHostKeyChecking=accept-new \
+            "${{ inputs.staging_user }}@${{ inputs.staging_host }}" \
+            "cat ${{ inputs.restore_dir }}/last_rehearsal.json" > record.json
+          rm -f .staging_key
 
       - name: Read the candidate's recipe
         env:
@@ -132,7 +136,7 @@ jobs:
           if not re.fullmatch(r"[\w-]+( [\w-]+)*", os.environ["DBS"].strip()): sys.exit("upgrade_databases must be plain names separated by single spaces")
           if any("refs/pull/" in str(m) for r in (yaml.safe_load(open("recipe.yml")) or {}).values() for m in (r.get("merges") or [])):
               sys.exit("the candidate was built with a refs/pull merge: merge or drop it and aggregate again")
-          rec, last = json.load(open("record.json")), json.load(open("last_deploy.json"))
+          last = json.load(open("last_deploy.json"))
           def out(k, v):
               if re.search(r"[\x00-\x1f\x7f]", str(v)): sys.exit(f"{k} from the record contains control characters")
               print(f"{k}={v}")
@@ -141,7 +145,7 @@ jobs:
               if dbs != set(last["databases"].split()): sys.exit(f"a rollback upgrades the databases that deploy did ({last['databases']}), not {' '.join(sorted(dbs))}")
               out("rollback", "true"); out("expected_image_id", last["image_id"]); out("modules", "(rollback to the previous deploy)")
               sys.exit(0)
-          fail = []
+          rec, fail = json.load(open("record.json")), []
           if rec.get("commit") != sha: fail.append(f"last rehearsal was of {rec.get('commit')}, not {sha}: run Rehearse first")
           if rec.get("result") != "ok": fail.append(f"last rehearsal failed (exit {rec.get('exit_code')})")
           m = re.search(r"(\d{4}_\d{2}_\d{2}_\d{2}_\d{2}_\d{2})", rec.get("backup") or "")
