@@ -196,11 +196,17 @@ jobs:
           #    for approval), the image the rehearsal ran under is the one running,
           #    and the candidate is fetchable. Fetching changes nothing checked out.
           host_last=$(sed -n 's/.*"sha":"\([0-9a-f]*\)".*/\1/p' /odoo/last_deploy.json 2>/dev/null || true)
-          [ "$host_last" = "$LAST_SHA" ] || { echo "the host's last deploy is ${host_last:-none}, the gate saw ${LAST_SHA:-none}: production moved while this run waited, or a deploy went untagged; dispatch again" >&2; exit 1; }
+          current=$(sudo -n -u odoo git -C "$PROJECT_DIR" rev-parse HEAD)
+          # Already deployed here but its tag never landed: republish the record.
+          if [ "$host_last" = "$SHA" ] && [ "$current" = "$SHA" ]; then
+            echo "== $SHA is already deployed here; republishing its record"
+            [ "$DRY_RUN" = true ] || echo "DEPLOY_RECORD=$(cat /odoo/last_deploy.json)"
+            exit 0
+          fi
+          [ "$host_last" = "$LAST_SHA" ] || { echo "the host's last deploy is ${host_last:-none}, the gate saw ${LAST_SHA:-none}: production moved while this run waited, or that deploy's tag was never created (promote ${host_last:-it} again to create it)" >&2; exit 1; }
           image_id=$(docker inspect --format '{{.Image}}' "$SERVICE")
           [ "$image_id" = "$EXPECTED_IMAGE_ID" ] || { echo "production runs image $image_id, the rehearsal ran under $EXPECTED_IMAGE_ID: promote the image first" >&2; exit 1; }
           sudo -n -u odoo git -C "$PROJECT_DIR" fetch -q origin "$SHA"
-          current=$(sudo -n -u odoo git -C "$PROJECT_DIR" rev-parse HEAD)
           # A checkout away from the last deploy means a promotion was interrupted
           # after its reset: only a rollback to that deploy may proceed from here.
           if [ -n "$LAST_SHA" ] && [ "$SHA" != "$LAST_SHA" ] && [ "$current" != "$LAST_SHA" ]; then
@@ -265,7 +271,8 @@ jobs:
           ts=$(python3 -c 'import json,os;print(json.loads(os.environ["RECORD"])["timestamp"])')
           tag="prod/${{ inputs.host_name }}/$ts"
           obj=$(gh api "repos/${{ github.repository }}/git/tags" -f tag="$tag" -f message="$RECORD" -f object="${{ inputs.sha }}" -f type=commit --jq .sha)
-          gh api "repos/${{ github.repository }}/git/refs" -f ref="refs/tags/$tag" -f sha="$obj" >/dev/null
+          gh api "repos/${{ github.repository }}/git/refs" -f ref="refs/tags/$tag" -f sha="$obj" >/dev/null \
+            || gh api -X PATCH "repos/${{ github.repository }}/git/refs/tags/$tag" -f sha="$obj" >/dev/null
           { echo "## Promoted to ${{ inputs.host_name }}"; echo; echo "- commit \`${{ inputs.sha }}\`"; echo "- databases \`${{ inputs.upgrade_databases }}\`"; echo "- modules the rehearsal upgraded: ${{ needs.gate.outputs.modules }}"; echo "- tag \`$tag\`"; } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Dry-run summary
