@@ -128,13 +128,14 @@ jobs:
           DBS: ${{ inputs.upgrade_databases }}
           I18N: ${{ inputs.i18n_overwrite }}
         run: |
+          python3 -c 'import yaml' 2>/dev/null || pip install -q pyyaml
           python3 - <<'PY' >> "$GITHUB_OUTPUT"
           import json, os, re, sys, yaml
           sha, dbs, i18n = os.environ["SHA"], set(os.environ["DBS"].split()), os.environ["I18N"] == "true"
           if not re.fullmatch(r"[0-9a-f]{40}", sha): sys.exit(f"sha must be a full commit id, got {sha!r}")
           if not dbs or "auto" in dbs: sys.exit("upgrade_databases must name every production database; auto is refused")
           if not re.fullmatch(r"[\w-]+( [\w-]+)*", os.environ["DBS"].strip()): sys.exit("upgrade_databases must be plain names separated by single spaces")
-          if any("refs/pull/" in str(m) for r in (yaml.safe_load(open("recipe.yml")) or {}).values() for m in (r.get("merges") or [])):
+          if any("refs/pull/" in str(v) for r in (yaml.safe_load(open("recipe.yml")) or {}).values() for v in [r.get("target"), *(r.get("merges") or [])]):
               sys.exit("the candidate was built with a refs/pull merge: merge or drop it and aggregate again")
           last = json.load(open("last_deploy.json"))
           def out(k, v):
