@@ -1,0 +1,112 @@
+name: Rehearse on the copy database
+
+# Runs the staging host's restore script by hand: the copy database is rebuilt
+# from the latest production backup and upgraded against the code staging runs,
+# with the same click-odoo-update command production will be promoted with.
+# The script leaves a rehearsal record on the host; this workflow checks it,
+# publishes it on the run, and tags the rehearsed commit so it stays fetchable.
+# See odoo-ansible plans/production-deploy-promotion.md.
+
+on:
+  workflow_call:
+    inputs:
+      staging_host:
+        type: string
+        required: true
+      staging_port:
+        type: string
+        default: "60897"
+      staging_user:
+        type: string
+        default: quartile
+      host_name:
+        description: Short host name used in the tag (rehearsed/<host_name>/<time>), e.g. qrtl-stag.
+        type: string
+        required: true
+      expected_sha:
+        description: Fail before restoring unless the staging checkout is at this commit.
+        type: string
+        default: ""
+      restore_dir:
+        type: string
+        default: /opt/odoo_restore
+      project_dir:
+        description: The checkout the copy is upgraded against (restore.sh's code_dir).
+        type: string
+        default: /odoo/code/addons
+    outputs:
+      commit:
+        description: The commit the copy was upgraded against.
+        value: ${{ jobs.rehearse.outputs.commit }}
+    secrets:
+      STAGING_SSH_KEY:
+        required: true
+
+jobs:
+  rehearse:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      commit: ${{ steps.record.outputs.commit }}
+    env:
+      SSH: ssh -i ${{ github.workspace }}/.deploy_key -p ${{ inputs.staging_port }} -o StrictHostKeyChecking=accept-new ${{ inputs.staging_user }}@${{ inputs.staging_host }}
+    steps:
+      - name: Configure SSH
+        run: |
+          printf '%s\n' "${{ secrets.STAGING_SSH_KEY }}" > .deploy_key
+          chmod 600 .deploy_key
+
+      - name: Check the staging checkout
+        if: inputs.expected_sha != ''
+        env:
+          EXPECTED: ${{ inputs.expected_sha }}
+        run: |
+          head=$($SSH "sudo -n -u odoo git -C ${{ inputs.project_dir }} rev-parse HEAD")
+          [ "$head" = "$EXPECTED" ] || { echo "staging is at $head, not $EXPECTED" >&2; exit 1; }
+
+      # The script takes the host lock, restores, upgrades and writes the record.
+      # Its exit code is the result: 3 is a failed upgrade, 4 an unwritten record.
+      - name: Restore and upgrade the copy
+        run: $SSH "sudo -n ${{ inputs.restore_dir }}/restore.sh auto"
+
+      - name: Read the record
+        id: record
+        env:
+          EXPECTED: ${{ inputs.expected_sha }}
+          HOST: ${{ inputs.host_name }}
+        run: |
+          $SSH "cat ${{ inputs.restore_dir }}/last_rehearsal.json" > record.json
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os, re
+          r = json.load(open("record.json"))
+          commit = r.get("commit") or ""
+          if r["result"] != "ok":
+              raise SystemExit(f"rehearsal failed: exit {r['exit_code']}")
+          if not re.fullmatch(r"[0-9a-f]{40}", commit):
+              raise SystemExit(f"no clean commit recorded: {commit or 'not a git checkout'}")
+          # The record is written under the host lock; the pre-check above was not.
+          if os.environ["EXPECTED"] and commit != os.environ["EXPECTED"]:
+              raise SystemExit(f"rehearsed {commit}, not {os.environ['EXPECTED']}: staging was deployed after the check")
+          print(f"commit={commit}")
+          rows = "\n".join(f"| {d['source']} | {d['copy']} | {d['upgrade_tool']} | {', '.join(d['modules_upgraded']) or '(none)'} | {d['rc']} |" for d in r["databases"])
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+              f.write(f"## Rehearsal on {r.get('host') or os.environ['HOST']}\n\n"
+                      f"- commit `{commit}`\n- backup `{r['backup']}`\n- image `{r['image']}` (`{r['image_id']}`)\n"
+                      f"- i18n_overwrite `{str(r['i18n_overwrite']).lower()}`\n\n"
+                      "| database | copy | tool | modules upgraded | rc |\n|---|---|---|---|---|\n" + rows + "\n")
+          PY
+
+      - name: Tag the rehearsed commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMIT: ${{ steps.record.outputs.commit }}
+          HOST: ${{ inputs.host_name }}
+        run: |
+          tag="rehearsed/$HOST/$(date -u +%Y%m%dT%H%M%SZ)"
+          gh api "repos/${{ github.repository }}/git/refs" -f ref="refs/tags/$tag" -f sha="$COMMIT" >/dev/null
+          echo "tagged $tag" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Cleanup SSH key
+        if: always()
+        run: rm -f .deploy_key

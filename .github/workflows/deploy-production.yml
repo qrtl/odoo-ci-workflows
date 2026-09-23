@@ -1,0 +1,333 @@
+name: Promote to production
+
+# Deploys one aggregated commit that the copy database has rehearsed, behind
+# the caller's `production` environment. The gate job checks the rehearsal
+# record against the request and the candidate's recipe; the deploy job, once
+# approved, takes a pre-update backup, previews, stops Odoo, resets the checkout
+# to the exact commit, upgrades every database in a one-off container, starts
+# Odoo and records the deploy as a `prod/<host>/<time>` tag.
+# See odoo-ansible plans/production-deploy-promotion.md.
+
+on:
+  workflow_call:
+    inputs:
+      production_host:
+        type: string
+        required: true
+      production_port:
+        type: string
+        default: "60897"
+      production_user:
+        type: string
+        default: quartile
+      host_name:
+        description: Short host name used in the tag (prod/<host_name>/<time>), e.g. qrtl-prod.
+        type: string
+        required: true
+      staging_host:
+        description: Where the rehearsal record is read from.
+        type: string
+        required: true
+      staging_port:
+        type: string
+        default: "60897"
+      staging_user:
+        type: string
+        default: quartile
+      sha:
+        description: The aggregated commit to deploy. A commit, never a branch.
+        type: string
+        required: true
+      upgrade_databases:
+        description: Space-separated production databases; must be every database the rehearsal restored.
+        type: string
+        required: true
+      i18n_overwrite:
+        description: Must equal the flag the rehearsal ran with.
+        type: boolean
+        default: true
+      dry_run:
+        description: Stop after the backup and the preview; change nothing.
+        type: boolean
+        default: false
+      republish:
+        description: Only publish the tag of a commit already deployed here, whose run lost its tag step. No rehearsal is checked; nothing is deployed.
+        type: boolean
+        default: false
+      environment:
+        type: string
+        default: production
+      project_dir:
+        type: string
+        default: /odoo/code/addons
+      service_name:
+        type: string
+        default: odoo
+      odoo_source_path:
+        type: string
+        default: /odoo/code/odoo
+      restore_dir:
+        type: string
+        default: /opt/odoo_restore
+      backup_script:
+        type: string
+        default: /opt/odoo_backup/backup.sh
+      http_port:
+        type: string
+        default: "8069"
+    secrets:
+      STAGING_SSH_KEY:
+        required: true
+      PRODUCTION_SSH_KEY:
+        required: true
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    outputs:
+      expected_image_id: ${{ steps.check.outputs.expected_image_id }}
+      modules: ${{ steps.check.outputs.modules }}
+      rollback: ${{ steps.check.outputs.rollback }}
+      last_sha: ${{ steps.check.outputs.last_sha }}
+    steps:
+      # The latest successful deploy, from its annotated tag: the rollback target,
+      # and the baseline a forward rehearsal's backup must postdate.
+      - name: Read the latest deploy record
+        id: last
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HOST: ${{ inputs.host_name }}
+        run: |
+          last=$(gh api --paginate "repos/${{ github.repository }}/git/matching-refs/tags/prod/$HOST/" --jq '.[].object.sha' | tail -n 1)
+          if [ -n "$last" ]; then
+            gh api "repos/${{ github.repository }}/git/tags/$last" --jq '.message' > last_deploy.json
+          else
+            echo '{}' > last_deploy.json
+          fi
+          echo "sha=$(python3 -c 'import json;print(json.load(open("last_deploy.json")).get("sha",""))')" >> "$GITHUB_OUTPUT"
+
+      # A rollback redeploys the last deploy and needs no rehearsal: staging may be down.
+      - name: Read the rehearsal record from staging
+        if: steps.last.outputs.sha != inputs.sha && !inputs.republish
+        run: |
+          printf '%s\n' "${{ secrets.STAGING_SSH_KEY }}" > .staging_key && chmod 600 .staging_key
+          ssh -i .staging_key -p "${{ inputs.staging_port }}" -o StrictHostKeyChecking=accept-new \
+            "${{ inputs.staging_user }}@${{ inputs.staging_host }}" \
+            "cat ${{ inputs.restore_dir }}/last_rehearsal.json" > record.json
+          rm -f .staging_key
+
+      - name: Read the candidate's recipe
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ inputs.sha }}
+        run: |
+          [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "sha must be a full commit id, got $SHA" >&2; exit 1; }
+          gh api "repos/${{ github.repository }}/contents/repos.yml?ref=$SHA" --jq .content 2>/dev/null | base64 -d > recipe.yml \
+            || { echo "commit $SHA carries no repos.yml: aggregate again so the snapshot records its recipe" >&2; exit 1; }
+
+      - name: Check the request against the record
+        id: check
+        env:
+          SHA: ${{ inputs.sha }}
+          DBS: ${{ inputs.upgrade_databases }}
+          I18N: ${{ inputs.i18n_overwrite }}
+          REPUBLISH: ${{ inputs.republish }}
+        run: |
+          python3 -c 'import yaml' 2>/dev/null || pip install -q pyyaml
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os, re, sys, yaml
+          sha, dbs, i18n = os.environ["SHA"], set(os.environ["DBS"].split()), os.environ["I18N"] == "true"
+          if not re.fullmatch(r"[0-9a-f]{40}", sha): sys.exit(f"sha must be a full commit id, got {sha!r}")
+          if not dbs or "auto" in dbs: sys.exit("upgrade_databases must name every production database; auto is refused")
+          if not re.fullmatch(r"[\w-]+( [\w-]+)*", os.environ["DBS"].strip()): sys.exit("upgrade_databases must be plain names separated by single spaces")
+          if any("refs/pull/" in str(v) for r in (yaml.safe_load(open("recipe.yml")) or {}).values() for v in [r.get("target"), *(r.get("merges") or [])]):
+              sys.exit("the candidate was built with a refs/pull merge: merge or drop it and aggregate again")
+          last = json.load(open("last_deploy.json"))
+          def out(k, v):
+              if re.search(r"[\x00-\x1f\x7f]", str(v)): sys.exit(f"{k} from the record contains control characters")
+              print(f"{k}={v}")
+          out("last_sha", last.get("sha", ""))
+          if os.environ["REPUBLISH"] == "true":
+              out("rollback", "false"); out("expected_image_id", ""); out("modules", "(republish of a deploy that lost its tag)"); sys.exit(0)
+          if last and sha == last.get("sha"):
+              if dbs != set(last["databases"].split()): sys.exit(f"a rollback upgrades the databases that deploy did ({last['databases']}), not {' '.join(sorted(dbs))}")
+              out("rollback", "true"); out("expected_image_id", last["image_id"]); out("modules", "(rollback to the previous deploy)")
+              sys.exit(0)
+          rec, fail = json.load(open("record.json")), []
+          if rec.get("commit") != sha: fail.append(f"last rehearsal was of {rec.get('commit')}, not {sha}: run Rehearse first")
+          if rec.get("result") != "ok": fail.append(f"last rehearsal failed (exit {rec.get('exit_code')})")
+          m = re.search(r"(\d{4}_\d{2}_\d{2}_\d{2}_\d{2}_\d{2})", rec.get("backup") or "")
+          if last and not m: fail.append(f"rehearsal record names no backup timestamp ({rec.get('backup')!r}): cannot tell whether it postdates the current deploy")
+          if last and m and m.group(1) <= last.get("timestamp", ""):
+              fail.append(f"rehearsal backup {m.group(1)} predates the current deploy {last['timestamp']}: wait for the next backup, then Rehearse")
+          rehearsed = {d["source"] for d in rec.get("databases", [])}
+          if rehearsed != dbs: fail.append(f"rehearsed databases {sorted(rehearsed)} != requested {sorted(dbs)}: promote every database, not a subset")
+          if rec.get("i18n_overwrite") != i18n: fail.append(f"rehearsal ran with i18n_overwrite={rec.get('i18n_overwrite')}, request says {i18n}")
+          if fail: sys.exit("\n".join(fail))
+          mods = sorted({m for d in rec["databases"] for m in d["modules_upgraded"]})
+          out("rollback", "false"); out("expected_image_id", rec["image_id"]); out("modules", " ".join(mods) or "(none)")
+          PY
+
+  deploy:
+    needs: gate
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    permissions:
+      contents: write
+    steps:
+      - name: Configure SSH
+        run: |
+          printf '%s\n' "${{ secrets.PRODUCTION_SSH_KEY }}" > .prod_key && chmod 600 .prod_key
+
+      # Values reach the remote shell as %q-quoted assignments on stdin, never on
+      # the ssh command line (see deploy-staging.yml for why).
+      - name: Promote
+        id: promote
+        env:
+          SHA: ${{ inputs.sha }}
+          DBS: ${{ inputs.upgrade_databases }}
+          I18N: ${{ inputs.i18n_overwrite }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          REPUBLISH: ${{ inputs.republish }}
+          EXPECTED_IMAGE_ID: ${{ needs.gate.outputs.expected_image_id }}
+          LAST_SHA: ${{ needs.gate.outputs.last_sha }}
+          MODULES: ${{ needs.gate.outputs.modules }}
+          PROJECT_DIR: ${{ inputs.project_dir }}
+          SERVICE: ${{ inputs.service_name }}
+          SRC: ${{ inputs.odoo_source_path }}
+          BACKUP: ${{ inputs.backup_script }}
+          HTTP_PORT: ${{ inputs.http_port }}
+        run: |
+          {
+            for v in SHA DBS I18N DRY_RUN REPUBLISH EXPECTED_IMAGE_ID LAST_SHA MODULES PROJECT_DIR SERVICE SRC BACKUP HTTP_PORT; do
+              printf '%s=%q\n' "$v" "${!v}"
+            done
+            cat <<'REMOTE'
+          set -euo pipefail
+          # 1. One lock per host, shared with backup.sh, restore.sh and the container play.
+          LOCKFILE=/odoo/host.lock
+          [ -e "$LOCKFILE" ] || sudo -n install -m 0644 -o root -g root /dev/null "$LOCKFILE"
+          exec 200<"$LOCKFILE"
+          flock -w 1800 200 || { echo "host lock held for 30 minutes; giving up" >&2; exit 1; }
+
+          # 2. Under the lock: production is still at the deploy the gate judged
+          #    against (another promotion may have landed while this one waited
+          #    for approval), the image the rehearsal ran under is the one running,
+          #    and the candidate is fetchable. Fetching changes nothing checked out.
+          host_last=$(sed -n 's/.*"sha":"\([0-9a-f]*\)".*/\1/p' /odoo/last_deploy.json 2>/dev/null || true)
+          current=$(sudo -n -u odoo git -C "$PROJECT_DIR" rev-parse HEAD)
+          pending=$(cat /odoo/promotion.pending 2>/dev/null || true)   # step 5's "<sha>", then "<sha> upgrading"
+          p_sha=${pending%% *}
+          # Deployed here in full but its tag never landed: republish the record. A
+          # marker older than the record is one the run did not live to remove.
+          if [ "$host_last" = "$SHA" ] && [ "$current" = "$SHA" ] && { [ -z "$pending" ] || [ /odoo/last_deploy.json -nt /odoo/promotion.pending ]; }; then
+            sudo -n rm -f /odoo/promotion.pending
+            echo "== $SHA is already deployed here; republishing its record"
+            [ "$DRY_RUN" = true ] || echo "DEPLOY_RECORD=$(cat /odoo/last_deploy.json)"
+            exit 0
+          fi
+          [ "$REPUBLISH" != true ] || { echo "republish refused: $SHA is not deployed here in full (last deploy ${host_last:-none}, checkout at $current${pending:+, promotion of $p_sha pending})" >&2; exit 1; }
+          [ "$host_last" = "$LAST_SHA" ] || { echo "the host's last deploy is ${host_last:-none}, the gate saw ${LAST_SHA:-none}: production moved while this run waited, or that deploy's tag was never created (promote ${host_last:-it} again to create it)" >&2; exit 1; }
+          # A marker means a promotion was interrupted: retry it, or roll back the
+          # code if no database upgrade had begun. Once one had, old code cannot
+          # undo a migration: the data comes back from the backup first.
+          if [ -n "$p_sha" ] && [ "$p_sha" != "$SHA" ]; then
+            if [ "$SHA" = "$LAST_SHA" ] && [ "$pending" = "$p_sha" ]; then
+              echo "== rolling back the interrupted promotion of $p_sha; no database upgrade had begun"
+            elif [ "$SHA" = "$LAST_SHA" ]; then
+              echo "the interrupted promotion of $p_sha had begun upgrading databases: restore the pre-update backup (restore_production.sh) before promoting again" >&2; exit 1
+            else
+              echo "a promotion of $p_sha was interrupted: promote it again${LAST_SHA:+, or roll back to $LAST_SHA}" >&2; exit 1
+            fi
+          fi
+          image_id=$(docker inspect --format '{{.Image}}' "$SERVICE")
+          [ "$image_id" = "$EXPECTED_IMAGE_ID" ] || { echo "production runs image $image_id, the rehearsal ran under $EXPECTED_IMAGE_ID: promote the image first" >&2; exit 1; }
+          sudo -n -u odoo git -C "$PROJECT_DIR" fetch -q origin "$SHA"
+          # A checkout at neither the last deploy nor the candidate was moved by hand:
+          # only a rollback, or a retry of that very commit, may proceed from here.
+          if [ -n "$LAST_SHA" ] && [ "$SHA" != "$LAST_SHA" ] && [ "$current" != "$LAST_SHA" ] && [ "$current" != "$SHA" ]; then
+            echo "checkout is at $current, neither the last deploy $LAST_SHA nor $SHA: roll back to $LAST_SHA first" >&2; exit 1
+          fi
+          echo "== production at $current, promoting $SHA"
+
+          # 3. Pre-update backup, inside our lock (the script would otherwise wait on itself).
+          echo "== backup"
+          sudo -n env ODOO_HOST_LOCK_HELD=1 "$BACKUP"
+
+          # 4. Preview: what the rehearsal upgraded, and the module directories the diff touches.
+          echo "== modules the rehearsal upgraded: $MODULES"
+          echo "== module directories changed:"
+          sudo -n -u odoo git -C "$PROJECT_DIR" diff --name-only "$current" "$SHA" | awk -F/ 'NF>2 {print $1"/"$2}' | sort -u
+          if [ "$DRY_RUN" = true ]; then echo "== dry run: stopping before any change"; exit 0; fi
+
+          # 5. Stop, then reset: the tree is bind-mounted, so a live reset serves a half-updated tree.
+          echo "== stop and reset"
+          printf '%s\n' "$SHA" | sudo -n tee /odoo/promotion.pending >/dev/null
+          docker stop "$SERVICE"
+          sudo -n -u odoo git -C "$PROJECT_DIR" reset -q --hard "$SHA"
+
+          # 6. Upgrade every database in a one-off container from the same image and
+          #    volumes, with the service still stopped, so no request meets new code
+          #    on an old schema.
+          printf '%s upgrading\n' "$SHA" | sudo -n tee /odoo/promotion.pending >/dev/null
+          args=(--ignore-core-addons --watcher-max-seconds 30 --logfile=/dev/stdout)
+          [ "$I18N" = true ] && args+=(--i18n-overwrite)
+          for db in $DBS; do
+            echo "== upgrading $db"
+            docker run --rm --volumes-from "$SERVICE" -e PYTHONPATH="$SRC" -u odoo "$image_id" \
+              click-odoo-update -c /odoo/etc/odoo.conf -d "$db" "${args[@]}"
+          done
+
+          # 7. Start and wait for Odoo to listen (the odoo_container role's check).
+          docker start "$SERVICE"
+          for i in $(seq 1 90); do
+            (exec 3<>"/dev/tcp/127.0.0.1/$HTTP_PORT") 2>/dev/null && break
+            [ "$i" -eq 90 ] && { echo "Odoo did not listen on $HTTP_PORT within 180s" >&2; exit 1; }
+            sleep 2
+          done
+
+          # 8. Deploy record, on the host and (via the runner) as a tag. The timestamp
+          #    is this host's clock in backup.sh's format, so the gate can compare it
+          #    with backup names.
+          ts=$(date +%Y_%m_%d_%H_%M_%S)
+          record=$(printf '{"sha":"%s","image":"%s","image_id":"%s","databases":"%s","timestamp":"%s"}' \
+            "$SHA" "$(docker inspect --format '{{.Config.Image}}' "$SERVICE")" "$image_id" "$DBS" "$ts")
+          printf '%s\n' "$record" | sudo -n tee /odoo/last_deploy.json.tmp >/dev/null
+          sudo -n mv -f /odoo/last_deploy.json.tmp /odoo/last_deploy.json   # atomic: a failed write keeps the previous record
+          sudo -n rm -f /odoo/promotion.pending
+          echo "DEPLOY_RECORD=$record"
+          echo "== deployed $SHA"
+          REMOTE
+          } | ssh -i .prod_key -p "${{ inputs.production_port }}" -o StrictHostKeyChecking=accept-new \
+                "${{ inputs.production_user }}@${{ inputs.production_host }}" bash -s | tee deploy.log
+          grep -o '^DEPLOY_RECORD=.*' deploy.log | sed 's/^DEPLOY_RECORD=/record=/' >> "$GITHUB_OUTPUT" || true
+
+      - name: Tag the deploy
+        if: steps.promote.outputs.record != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RECORD: ${{ steps.promote.outputs.record }}
+          HOST: ${{ inputs.host_name }}
+          SHA: ${{ inputs.sha }}
+          DBS: ${{ inputs.upgrade_databases }}
+          MODULES: ${{ needs.gate.outputs.modules }}
+        run: |
+          ts=$(python3 -c 'import json,os;print(json.loads(os.environ["RECORD"])["timestamp"])')
+          tag="prod/$HOST/$ts"
+          obj=$(gh api "repos/${{ github.repository }}/git/tags" -f tag="$tag" -f message="$RECORD" -f object="$SHA" -f type=commit --jq .sha)
+          gh api "repos/${{ github.repository }}/git/refs" -f ref="refs/tags/$tag" -f sha="$obj" >/dev/null \
+            || gh api -X PATCH "repos/${{ github.repository }}/git/refs/tags/$tag" -f sha="$obj" >/dev/null
+          { echo "## Promoted to $HOST"; echo; echo "- commit \`$SHA\`"; echo "- databases \`$DBS\`"; echo "- modules the rehearsal upgraded: $MODULES"; echo "- tag \`$tag\`"; } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Dry-run summary
+        if: inputs.dry_run
+        env:
+          HOST: ${{ inputs.host_name }}
+          SHA: ${{ inputs.sha }}
+          ROLLBACK: ${{ needs.gate.outputs.rollback }}
+        run: |
+          { echo "## Dry run against $HOST"; echo; echo "Gate passed for \`$SHA\` (rollback: $ROLLBACK). Backup taken, preview printed, nothing changed."; echo; echo '```'; sed -n '/^== modules/,/^== dry run/p' deploy.log; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Cleanup SSH key
+        if: always()
+        run: rm -f .prod_key

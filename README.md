@@ -35,6 +35,35 @@ with a message naming the cause, after the code is out.
 msgid and a new msgstr replaces the stored translation (without it Odoo only fills
 terms that have none yet). It also replaces translations edited in the UI.
 
+### rehearse-staging.yml
+
+Runs the staging host's `/opt/odoo_restore/restore.sh auto` by hand — the nightly
+restore, on demand. The copy database is rebuilt from the latest production backup
+and upgraded against the code staging runs with the same `click-odoo-update`
+command production is promoted with. The script's rehearsal record is checked and
+published on the run, and the rehearsed commit is tagged `rehearsed/<host>/<time>`.
+Caller: `templates/caller-rehearse.yml`.
+
+### deploy-production.yml
+
+Promotes one aggregated commit to production, behind the caller repo's
+`production` environment. A **gate** job (no approval) refuses unless the last
+rehearsal record names the commit with a clean result, its backup postdates the
+current deploy, it covered exactly the requested databases with the requested
+translation flag, and the commit's own `repos.yml` has no uncommented
+`refs/pull/N/head` line. The previous deploy's commit is accepted as a rollback
+without a fresh rehearsal. The **deploy** job (approved) then, on the host: takes
+the shared lock, checks the running image is the one rehearsed under, fetches the
+commit, runs the pre-update backup, prints the preview (`dry_run` stops here;
+`republish` only recreates the tag of a commit already deployed, when its run lost that step),
+stops Odoo, resets the checkout, upgrades every database in a one-off container,
+starts Odoo, and records the deploy on the host and as an annotated tag
+`prod/<host>/<time>`. Caller: `templates/caller-promote.yml`. Design and
+rationale: odoo-ansible `plans/production-deploy-promotion.md`.
+
+The snapshot commit keeps its `repos.yml` (credentials stripped from URLs) so the
+gate can read what a candidate was built from.
+
 ## Project classification
 
 | Type | Projects | Template |
@@ -104,6 +133,7 @@ For projects already using aggregate-config (rbkk-private, hls-repos):
 |--------|-------|---------|
 | `GITHUB_TOKEN` | Auto-provided | Pushing to `_git_aggregated` within the same repo |
 | `STAGING_SSH_KEY` | Org-level | SSH private key for deploy to staging servers |
+| `PRODUCTION_SSH_KEY` | Repo `production` environment | SSH private key for the promotion; released only to an approved job |
 
 ### SSH key setup
 

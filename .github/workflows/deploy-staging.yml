@@ -124,9 +124,13 @@ jobs:
             fi
           fi
 
-          LOCKFILE="/tmp/deploy-$service_name.lock"
-          exec 200>"$LOCKFILE"
-          flock -n 200 || { echo "Deploy already in progress"; exit 1; }
+          # One lock per host, shared with restore.sh and backup.sh (odoo-ansible):
+          # a deploy must not reset the checkout under a restore. Root-owned and
+          # opened read-only, which flock allows, so root and this user share it.
+          LOCKFILE=/odoo/host.lock
+          [ -e "$LOCKFILE" ] || sudo -n install -m 0644 -o root -g root /dev/null "$LOCKFILE"
+          exec 200<"$LOCKFILE"
+          flock -w 1800 200 || { echo "Host lock $LOCKFILE held for 30 minutes; giving up"; exit 1; }
 
           cd "$project_dir"
           sudo -u odoo git fetch origin "$deploy_branch"

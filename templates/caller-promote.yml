@@ -1,0 +1,50 @@
+# Copy this file to your project's aggregate-config branch at:
+#   .github/workflows/promote.yml
+#
+# Promotes one aggregated commit that the copy database has rehearsed to the
+# production host, behind the repo's `production` environment (required
+# reviewers; PRODUCTION_SSH_KEY as an environment secret).
+# Replace all <PLACEHOLDER> values before use.
+
+name: Promote to production
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: The aggregated commit to deploy (full 40-hex id, as the staging run names it)
+        required: true
+      upgrade_databases:
+        description: Every production database, space-separated
+        required: true
+        default: "<PRODUCTION_DATABASES>"
+      dry_run:
+        description: Stop after the backup and the preview; change nothing
+        type: boolean
+        default: false
+      republish:
+        description: Only publish the tag of a commit already deployed, whose run lost its tag step
+        type: boolean
+        default: false
+
+jobs:
+  promote:
+    uses: qrtl/odoo-ci-workflows/.github/workflows/deploy-production.yml@main
+    with:
+      production_host: "<PRODUCTION_HOST>"
+      production_port: "<PRODUCTION_PORT>"
+      production_user: <PRODUCTION_USER>
+      host_name: <PROJECT>-prod
+      staging_host: "<STAGING_HOST>"
+      staging_port: "<STAGING_PORT>"
+      staging_user: <STAGING_USER>
+      sha: ${{ inputs.sha }}
+      upgrade_databases: ${{ inputs.upgrade_databases }}
+      # Must equal upgrade_i18n_overwrite in the staging host's restore.conf.
+      i18n_overwrite: true
+      dry_run: ${{ inputs.dry_run }}
+      republish: ${{ inputs.republish }}
+      # project_dir: /odoo/code/addons  # if the production checkout lives elsewhere
+    secrets: inherit
+    permissions:
+      contents: write

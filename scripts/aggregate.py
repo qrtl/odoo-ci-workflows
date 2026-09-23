@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 import shutil
 import subprocess
@@ -86,7 +87,10 @@ def main():
 
     (repo / "repos.yml").write_text(cfg_text, encoding="utf-8")
     run("gitaggregate", "-c", "repos.yml", cwd=repo)
-    run("rm", "-f", "repos.yml", cwd=repo)
+    # Keep the recipe in the snapshot so the commit says what went into it: the
+    # production promotion refuses a candidate built with refs/pull lines. With
+    # any credential stripped from the URLs - the branch is deployed to hosts.
+    (repo / "repos.yml").write_text(re.sub(r"(https?://)[^/\s@]+@", r"\1", cfg_text), encoding="utf-8")
 
     # Remove inner .git dirs so aggregated repos become plain directories
     for d in out_dirs:

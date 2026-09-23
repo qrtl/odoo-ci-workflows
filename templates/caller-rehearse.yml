@@ -1,0 +1,31 @@
+# Copy this file to your project's aggregate-config branch at:
+#   .github/workflows/rehearse.yml
+#
+# Rehearses the code staging runs on the copy database, on demand: the nightly
+# restore, dispatched by hand. Run it before promoting; the promotion refuses a
+# commit the copy has not rehearsed.
+# Replace all <PLACEHOLDER> values before use.
+
+name: Rehearse on the copy database
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Fail before restoring unless staging is at this commit (optional)
+        required: false
+        default: ""
+
+jobs:
+  rehearse:
+    uses: qrtl/odoo-ci-workflows/.github/workflows/rehearse-staging.yml@main
+    with:
+      staging_host: "<STAGING_HOST>"
+      staging_port: "<STAGING_PORT>"
+      staging_user: <STAGING_USER>
+      host_name: <PROJECT>-stag
+      expected_sha: ${{ inputs.expected_sha }}
+      # project_dir: /odoo/code/addons  # if the staging checkout lives elsewhere
+    secrets: inherit
+    permissions:
+      contents: write
