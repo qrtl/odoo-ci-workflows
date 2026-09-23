@@ -46,10 +46,13 @@ Caller: `templates/caller-rehearse.yml`.
 
 ### deploy-production.yml
 
-Promotes one aggregated commit to production. The caller restricts who may
-dispatch it (`if: contains(..., github.actor)` in the template): a private repo's
-`production` environment holds the SSH key but cannot require reviewers below the
-Enterprise plan, so the dispatch is the approval. A **gate** job refuses unless the last
+Promotes one aggregated commit to production. A private repo's `production`
+environment holds the SSH key but cannot require reviewers below the Enterprise
+plan, and an environment without rules releases its secrets to any job in the
+repo that names it. So the caller repo limits the environment to the
+`aggregate-config` branch, protects that branch so only promoters push it, and
+the caller job runs only for a listed dispatcher (`if: contains(..., github.actor)`
+in the template): the dispatch is the approval. A **gate** job refuses unless the last
 rehearsal record names the commit with a clean result, its backup postdates the
 current deploy, it covered exactly the requested databases with the requested
 translation flag, and the commit's own `repos.yml` has no uncommented
