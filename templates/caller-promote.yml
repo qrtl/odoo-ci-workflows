@@ -10,6 +10,9 @@
 # branch protection lets only promoters push that branch, and the `if` below
 # lets only them dispatch or rerun. The two promoter lists must match. Keeping
 # the caller off aggregate-config leaves that branch open to every developer.
+# Always dispatch from `promotion` (`--ref promotion`, or "Use workflow from"
+# in the Actions UI): both default to the default branch, whose copy the
+# environment refuses.
 # Replace all <PLACEHOLDER> values before use.
 
 name: Promote to production
