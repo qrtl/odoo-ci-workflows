@@ -49,8 +49,9 @@ Caller: `templates/caller-rehearse.yml`.
 Promotes one aggregated commit to production. A private repo's `production`
 environment holds the SSH key but cannot require reviewers below the Enterprise
 plan, and an environment without rules releases its secrets to any job in the
-repo that names it. So the caller repo limits the environment to the
-`aggregate-config` branch, protects that branch so only promoters push it, and
+repo that names it. So the caller lives on a `promotion` branch of its own; the
+caller repo limits the environment to that branch, protects it so only the
+project's promoters push it (`aggregate-config` stays open to every developer), and
 the caller job runs only when both `github.actor` and `github.triggering_actor`
 (a rerun keeps the original dispatcher as the former) are listed promoters: the
 dispatch is the approval. A **gate** job refuses unless the last
