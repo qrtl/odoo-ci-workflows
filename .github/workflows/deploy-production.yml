@@ -291,8 +291,10 @@ jobs:
           #    keeps running the old code; only files read per request (static
           #    assets) come from the new tree before the restart.
           echo "== reset"
-          # What the service runs: the last deploy, unless an interrupted run of $SHA got to its restart.
-          [ "$pending" = "$SHA restarting" ] && running=$SHA || running=${LAST_SHA:-$current}
+          # What the service runs: the last deploy, unless it (re)started after an
+          # interrupted run of $SHA marked its restart.
+          started=$(date -d "$(docker inspect --format '{{.State.StartedAt}}' "$SERVICE")" +%s)
+          [ "$pending" = "$SHA restarting" ] && [ "$started" -ge "$(stat -c %Y /odoo/promotion.pending)" ] && running=$SHA || running=${LAST_SHA:-$current}
           printf '%s\n' "$SHA" | sudo -n tee /odoo/promotion.pending >/dev/null
           sudo -n -u odoo git -C "$PROJECT_DIR" reset -q --hard "$SHA"
 
