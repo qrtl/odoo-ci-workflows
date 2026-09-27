@@ -291,7 +291,8 @@ jobs:
           #    keeps running the old code; only files read per request (static
           #    assets) come from the new tree before the restart.
           echo "== reset"
-          running=${LAST_SHA:-$current}   # what the service runs: a pending promotion never restarted it
+          # What the service runs: the last deploy, unless an interrupted run of $SHA got to its restart.
+          [ "$pending" = "$SHA restarting" ] && running=$SHA || running=${LAST_SHA:-$current}
           printf '%s\n' "$SHA" | sudo -n tee /odoo/promotion.pending >/dev/null
           sudo -n -u odoo git -C "$PROJECT_DIR" reset -q --hard "$SHA"
 
@@ -311,6 +312,7 @@ jobs:
 
           # 7. Restart, the only downtime, and wait for Odoo to listen (the
           #    odoo_container role's check).
+          printf '%s restarting\n' "$SHA" | sudo -n tee /odoo/promotion.pending >/dev/null
           docker restart "$SERVICE"
           for i in $(seq 1 90); do
             (exec 3<>"/dev/tcp/127.0.0.1/$HTTP_PORT") 2>/dev/null && break
