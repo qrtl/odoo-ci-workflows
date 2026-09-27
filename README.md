@@ -57,17 +57,19 @@ the caller job runs only when both `github.actor` and `github.triggering_actor`
 dispatch is the approval. Dispatch from the `promotion` ref (`--ref promotion`,
 or "Use workflow from" in the Actions UI); both default to the default branch,
 whose copy of the caller only exists to list the workflow and is refused the
-environment. A **gate** job refuses unless the last
+environment. With no inputs it promotes the commit staging last rehearsed, to the
+databases that rehearsal covered. A **gate** job refuses unless the last
 rehearsal record names the commit with a clean result, its backup postdates the
 current deploy, it covered exactly the requested databases with the requested
 translation flag, and the commit's own `repos.yml` has no uncommented
 `refs/pull/N/head` line. The previous deploy's commit is accepted as a rollback
 without a fresh rehearsal. The **deploy** job then, on the host: takes
 the shared lock, checks the running image is the one rehearsed under, fetches the
-commit, runs the pre-update backup, prints the preview (`dry_run` stops here;
+commit, refuses a change that carries `migrations/` or `upgrades/` scripts (those go
+by hand, in a window), prints the preview (`dry_run` stops here;
 `republish` only recreates the tag of a commit already deployed, when its run lost that step),
-stops Odoo, resets the checkout, upgrades every database in a one-off container,
-starts Odoo, and records the deploy on the host and as an annotated tag
+resets the checkout, upgrades every database in a one-off container while Odoo
+keeps serving, restarts Odoo (the only downtime), and records the deploy on the host and as an annotated tag
 `prod/<host>/<time>`. Caller: `templates/caller-promote.yml`. Design and
 rationale: odoo-ansible `plans/production-deploy-promotion.md`.
 

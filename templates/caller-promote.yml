@@ -21,14 +21,13 @@ on:
   workflow_dispatch:
     inputs:
       sha:
-        description: The aggregated commit to deploy (full 40-hex id, as the staging run names it)
-        required: true
+        description: The aggregated commit to deploy (full 40-hex id); empty promotes the commit staging last rehearsed
+        required: false
       upgrade_databases:
-        description: Every production database, space-separated
-        required: true
-        default: "<PRODUCTION_DATABASES>"
+        description: Every production database, space-separated; empty means the ones the rehearsal covered
+        required: false
       dry_run:
-        description: Stop after the backup and the preview; change nothing
+        description: Stop after the preview; change nothing
         type: boolean
         default: false
       republish:
