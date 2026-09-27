@@ -20,7 +20,8 @@ def rm_tree(p: Path):
         shutil.rmtree(p)
 
 
-def pr_merged(remote_url, number, token):
+def pr_merged(remote_url, number, base, token):
+    """True when PR `number` is merged into `base`, the branch the section aggregates."""
     m = re.search(r"github\.com[:/]([^/\s]+)/([^/\s]+?)(?:\.git)?/?$", remote_url)
     if not m:
         return None
@@ -28,26 +29,29 @@ def pr_merged(remote_url, number, token):
     cred = re.search(r"https?://([^@/\s]+)@", remote_url)
     env = dict(os.environ, GH_TOKEN=cred.group(1).split(":")[-1] if cred else token)
     try:
-        out = subprocess.check_output(["gh", "api", f"repos/{m[1]}/{m[2]}/pulls/{number}", "--jq", ".merged"],
+        out = subprocess.check_output(["gh", "api", f"repos/{m[1]}/{m[2]}/pulls/{number}", "--jq", ".merged, .base.ref"],
                                       env=env, text=True, stderr=subprocess.STDOUT)
     except subprocess.CalledProcessError as e:
         print(f"WARNING cannot read {m[1]}/{m[2]} PR {number}, line kept: {e.output.strip()}")
         return None
-    return out.strip() == "true"
+    return out.split() == ["true", base]
 
 
 def drop_merged_pr_lines(cfg_text, token):
     """Comment out the `- <remote> refs/pull/N/head` lines whose PR is merged: the base
     branch already carries them, and the production promotion refuses them."""
-    remotes, out, dropped = {}, [], []
+    remotes, bases, out, dropped = {}, {}, [], []
     for line in cfg_text.splitlines(keepends=True):
         if re.match(r"^\S", line):
-            remotes = {}
+            remotes, bases = {}, {}
         m = re.match(r"^\s+([\w-]+):\s*(\S*github\.com\S+)", line)
         if m:
             remotes[m[1]] = m[2].strip("\"'")
+        m = re.match(r"^\s*-\s*([\w-]+)\s+(\S+)", line)
+        if m and not m[2].startswith("refs/pull/"):
+            bases[m[1]] = m[2]
         m = re.match(r"^(\s*)-\s*([\w-]+)\s+refs/pull/(\d+)/head\b", line)
-        if m and m[2] in remotes and pr_merged(remotes[m[2]], m[3], token):
+        if m and m[2] in remotes and m[2] in bases and pr_merged(remotes[m[2]], m[3], bases[m[2]], token):
             body = line[len(m[1]):].rstrip()
             line = f"{m[1]}#{body}{'' if ' #' in body else '  #'} (MERGED)\n"
             dropped.append(m[3])
