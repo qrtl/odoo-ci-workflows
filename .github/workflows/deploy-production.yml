@@ -277,7 +277,7 @@ jobs:
           # 3. Migration scripts rewrite data that users keep writing during a live
           #    upgrade; such a change goes to production by hand, in a window.
           if [ "$SHA" != "$LAST_SHA" ]; then
-            mig=$(sudo -n -u odoo git -C "$PROJECT_DIR" diff --name-only "$current" "$SHA" | grep -E '^[^/]+/[^/]+/(migrations|upgrades)/' || true)
+            mig=$(sudo -n -u odoo git -C "$PROJECT_DIR" diff --name-only "$current" "$SHA" | grep -E '(^|/)(migrations|upgrades)/' || true)
             [ -z "$mig" ] || { printf '%s\n' "$mig" >&2; echo "the change carries migration scripts (above): deploy it by hand in a maintenance window" >&2; exit 1; }
           fi
 
@@ -304,7 +304,8 @@ jobs:
           for db in $DBS; do
             echo "== upgrading $db"
             docker run --rm --volumes-from "$SERVICE" -e PYTHONPATH="$SRC" -u odoo "$image_id" \
-              click-odoo-update -c /odoo/etc/odoo.conf -d "$db" "${args[@]}"
+              click-odoo-update -c /odoo/etc/odoo.conf -d "$db" "${args[@]}" \
+              || { sudo -n -u odoo git -C "$PROJECT_DIR" reset -q --hard "$current"; echo "upgrading $db failed: checkout put back to $current, the code the service still runs; promote again once fixed" >&2; exit 1; }
           done
 
           # 7. Restart, the only downtime, and wait for Odoo to listen (the
