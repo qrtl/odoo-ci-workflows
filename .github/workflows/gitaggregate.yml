@@ -7,6 +7,10 @@ on:
         description: Path to repos.yml in the calling repo
         type: string
         default: repos.yml
+      config_branch:
+        description: Branch holding repos.yml; checked out whatever triggered the run, and merged PR lines are dropped from it.
+        type: string
+        default: aggregate-config
       target_branch:
         description: Branch to push materialized addons to
         type: string
@@ -29,10 +33,13 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    outputs:
+      changed: ${{ steps.build.outputs.changed }}
 
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.config_branch }}
           fetch-depth: 0
 
       - uses: actions/checkout@v4
@@ -47,8 +54,10 @@ jobs:
       - run: pip install git-aggregator pyyaml
 
       - name: Build addons and push to ${{ inputs.target_branch }}
+        id: build
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TARGET_BRANCH: ${{ inputs.target_branch }}
+          CONFIG_BRANCH: ${{ inputs.config_branch }}
           COMMIT_MESSAGE: ${{ inputs.commit_message }}
         run: python .ci-tools/scripts/aggregate.py ${{ inputs.config_path }}
