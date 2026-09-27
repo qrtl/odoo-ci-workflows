@@ -3,9 +3,9 @@ name: Promote to production
 # Deploys one aggregated commit that the copy database has rehearsed, behind
 # the caller's `production` environment, whose caller limits who may dispatch.
 # The gate job checks the rehearsal record against the request and the
-# candidate's recipe; the deploy job takes a pre-update backup, previews, stops Odoo, resets the checkout
-# to the exact commit, upgrades every database in a one-off container, starts
-# Odoo and records the deploy as a `prod/<host>/<time>` tag.
+# candidate's recipe; the deploy job previews, resets the checkout to the exact
+# commit, upgrades every database in a one-off container while Odoo keeps
+# serving, restarts Odoo and records the deploy as a `prod/<host>/<time>` tag.
 # See odoo-ansible plans/production-deploy-promotion.md.
 
 on:
@@ -35,19 +35,19 @@ on:
         type: string
         default: quartile
       sha:
-        description: The aggregated commit to deploy. A commit, never a branch.
+        description: The aggregated commit to deploy. A commit, never a branch. Empty means the commit staging last rehearsed.
         type: string
-        required: true
+        default: ""
       upgrade_databases:
-        description: Space-separated production databases; must be every database the rehearsal restored.
+        description: Space-separated production databases; must be every database the rehearsal restored. Empty means exactly those.
         type: string
-        required: true
+        default: ""
       i18n_overwrite:
         description: Must equal the flag the rehearsal ran with.
         type: boolean
         default: true
       dry_run:
-        description: Stop after the backup and the preview; change nothing.
+        description: Stop after the preview; change nothing.
         type: boolean
         default: false
       republish:
@@ -69,9 +69,6 @@ on:
       restore_dir:
         type: string
         default: /opt/odoo_restore
-      backup_script:
-        type: string
-        default: /opt/odoo_backup/backup.sh
       http_port:
         type: string
         default: "8069"
@@ -85,6 +82,8 @@ jobs:
   gate:
     runs-on: ubuntu-latest
     outputs:
+      sha: ${{ steps.req.outputs.sha }}
+      dbs: ${{ steps.req.outputs.dbs }}
       expected_image_id: ${{ steps.check.outputs.expected_image_id }}
       modules: ${{ steps.check.outputs.modules }}
       rollback: ${{ steps.check.outputs.rollback }}
@@ -108,7 +107,7 @@ jobs:
 
       # A rollback redeploys the last deploy and needs no rehearsal: staging may be down.
       - name: Read the rehearsal record from staging
-        if: steps.last.outputs.sha != inputs.sha && !inputs.republish
+        if: (inputs.sha == '' || steps.last.outputs.sha != inputs.sha) && !inputs.republish
         run: |
           printf '%s\n' "${{ secrets.STAGING_SSH_KEY }}" > .staging_key && chmod 600 .staging_key
           ssh -i .staging_key -p "${{ inputs.staging_port }}" -o StrictHostKeyChecking=accept-new \
@@ -116,10 +115,36 @@ jobs:
             "cat ${{ inputs.restore_dir }}/last_rehearsal.json" > record.json
           rm -f .staging_key
 
+      # An empty sha promotes what staging last rehearsed, and empty databases
+      # are the ones that rehearsal (or, for a rollback, that deploy) covered.
+      - name: Resolve the request
+        id: req
+        env:
+          SHA: ${{ inputs.sha }}
+          DBS: ${{ inputs.upgrade_databases }}
+          REPUBLISH: ${{ inputs.republish }}
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os, re, sys
+          last = json.load(open("last_deploy.json"))
+          rec = json.load(open("record.json")) if os.path.exists("record.json") else {}
+          sha = os.environ["SHA"].strip()
+          if not sha:
+              if os.environ["REPUBLISH"] == "true": sys.exit("republish needs the sha of the deploy to republish")
+              sha = rec.get("commit") or ""
+              if last and sha == last.get("sha"): sys.exit(f"staging's rehearsed commit {sha} is already deployed: nothing to promote")
+          dbs = " ".join(os.environ["DBS"].split())
+          if not dbs:
+              dbs = last.get("databases", "") if last and sha == last.get("sha") else " ".join(sorted({d["source"] for d in rec.get("databases", [])}))
+          for k, v in (("sha", sha), ("dbs", dbs)):
+              if re.search(r"[\x00-\x1f\x7f]", v): sys.exit(f"{k} contains control characters")
+              print(f"{k}={v}")
+          PY
+
       - name: Read the candidate's recipe
         env:
           GH_TOKEN: ${{ github.token }}
-          SHA: ${{ inputs.sha }}
+          SHA: ${{ steps.req.outputs.sha }}
         run: |
           [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "sha must be a full commit id, got $SHA" >&2; exit 1; }
           gh api "repos/${{ github.repository }}/contents/repos.yml?ref=$SHA" --jq .content 2>/dev/null | base64 -d > recipe.yml \
@@ -128,8 +153,8 @@ jobs:
       - name: Check the request against the record
         id: check
         env:
-          SHA: ${{ inputs.sha }}
-          DBS: ${{ inputs.upgrade_databases }}
+          SHA: ${{ steps.req.outputs.sha }}
+          DBS: ${{ steps.req.outputs.dbs }}
           I18N: ${{ inputs.i18n_overwrite }}
           REPUBLISH: ${{ inputs.republish }}
         run: |
@@ -184,8 +209,8 @@ jobs:
       - name: Promote
         id: promote
         env:
-          SHA: ${{ inputs.sha }}
-          DBS: ${{ inputs.upgrade_databases }}
+          SHA: ${{ needs.gate.outputs.sha }}
+          DBS: ${{ needs.gate.outputs.dbs }}
           I18N: ${{ inputs.i18n_overwrite }}
           DRY_RUN: ${{ inputs.dry_run }}
           REPUBLISH: ${{ inputs.republish }}
@@ -195,11 +220,10 @@ jobs:
           PROJECT_DIR: ${{ inputs.project_dir }}
           SERVICE: ${{ inputs.service_name }}
           SRC: ${{ inputs.odoo_source_path }}
-          BACKUP: ${{ inputs.backup_script }}
           HTTP_PORT: ${{ inputs.http_port }}
         run: |
           {
-            for v in SHA DBS I18N DRY_RUN REPUBLISH EXPECTED_IMAGE_ID LAST_SHA MODULES PROJECT_DIR SERVICE SRC BACKUP HTTP_PORT; do
+            for v in SHA DBS I18N DRY_RUN REPUBLISH EXPECTED_IMAGE_ID LAST_SHA MODULES PROJECT_DIR SERVICE SRC HTTP_PORT; do
               printf '%s=%q\n' "$v" "${!v}"
             done
             cat <<'REMOTE'
@@ -229,13 +253,13 @@ jobs:
           [ "$REPUBLISH" != true ] || { echo "republish refused: $SHA is not deployed here in full (last deploy ${host_last:-none}, checkout at $current${pending:+, promotion of $p_sha pending})" >&2; exit 1; }
           [ "$host_last" = "$LAST_SHA" ] || { echo "the host's last deploy is ${host_last:-none}, the gate saw ${LAST_SHA:-none}: production moved while this run waited, or that deploy's tag was never created (promote ${host_last:-it} again to create it)" >&2; exit 1; }
           # A marker means a promotion was interrupted: retry it, or roll back the
-          # code if no database upgrade had begun. Once one had, old code cannot
-          # undo a migration: the data comes back from the backup first.
+          # code if no database upgrade had begun. Once one had, finish it: rolling
+          # back past a partial upgrade means restoring a backup first.
           if [ -n "$p_sha" ] && [ "$p_sha" != "$SHA" ]; then
             if [ "$SHA" = "$LAST_SHA" ] && [ "$pending" = "$p_sha" ]; then
               echo "== rolling back the interrupted promotion of $p_sha; no database upgrade had begun"
             elif [ "$SHA" = "$LAST_SHA" ]; then
-              echo "the interrupted promotion of $p_sha had begun upgrading databases: restore the pre-update backup (restore_production.sh) before promoting again" >&2; exit 1
+              echo "the interrupted promotion of $p_sha had begun upgrading databases: promote it again, or restore the latest backup (restore_production.sh) before rolling back" >&2; exit 1
             else
               echo "a promotion of $p_sha was interrupted: promote it again${LAST_SHA:+, or roll back to $LAST_SHA}" >&2; exit 1
             fi
@@ -250,9 +274,12 @@ jobs:
           fi
           echo "== production at $current, promoting $SHA"
 
-          # 3. Pre-update backup, inside our lock (the script would otherwise wait on itself).
-          echo "== backup"
-          sudo -n env ODOO_HOST_LOCK_HELD=1 "$BACKUP"
+          # 3. Migration scripts rewrite data that users keep writing during a live
+          #    upgrade; such a change goes to production by hand, in a window.
+          if [ "$SHA" != "$LAST_SHA" ]; then
+            mig=$(sudo -n -u odoo git -C "$PROJECT_DIR" diff --name-only "$current" "$SHA" | grep -E '^[^/]+/[^/]+/(migrations|upgrades)/' || true)
+            [ -z "$mig" ] || { printf '%s\n' "$mig" >&2; echo "the change carries migration scripts (above): deploy it by hand in a maintenance window" >&2; exit 1; }
+          fi
 
           # 4. Preview: what the rehearsal upgraded, and the module directories the diff touches.
           echo "== modules the rehearsal upgraded: $MODULES"
@@ -260,15 +287,16 @@ jobs:
           sudo -n -u odoo git -C "$PROJECT_DIR" diff --name-only "$current" "$SHA" | awk -F/ 'NF>2 {print $1"/"$2}' | sort -u
           if [ "$DRY_RUN" = true ]; then echo "== dry run: stopping before any change"; exit 0; fi
 
-          # 5. Stop, then reset: the tree is bind-mounted, so a live reset serves a half-updated tree.
-          echo "== stop and reset"
+          # 5. Reset under the running service: its Python is loaded at start, so it
+          #    keeps running the old code; only files read per request (static
+          #    assets) come from the new tree before the restart.
+          echo "== reset"
           printf '%s\n' "$SHA" | sudo -n tee /odoo/promotion.pending >/dev/null
-          docker stop "$SERVICE"
           sudo -n -u odoo git -C "$PROJECT_DIR" reset -q --hard "$SHA"
 
           # 6. Upgrade every database in a one-off container from the same image and
-          #    volumes, with the service still stopped, so no request meets new code
-          #    on an old schema.
+          #    volumes. Until the restart, requests run the old code on the new
+          #    schema, which step 3 keeps to changes that do not rewrite data.
           printf '%s upgrading\n' "$SHA" | sudo -n tee /odoo/promotion.pending >/dev/null
           args=(--ignore-core-addons --watcher-max-seconds 30 --logfile=/dev/stdout)
           [ "$I18N" = true ] && args+=(--i18n-overwrite)
@@ -278,8 +306,9 @@ jobs:
               click-odoo-update -c /odoo/etc/odoo.conf -d "$db" "${args[@]}"
           done
 
-          # 7. Start and wait for Odoo to listen (the odoo_container role's check).
-          docker start "$SERVICE"
+          # 7. Restart, the only downtime, and wait for Odoo to listen (the
+          #    odoo_container role's check).
+          docker restart "$SERVICE"
           for i in $(seq 1 90); do
             (exec 3<>"/dev/tcp/127.0.0.1/$HTTP_PORT") 2>/dev/null && break
             [ "$i" -eq 90 ] && { echo "Odoo did not listen on $HTTP_PORT within 180s" >&2; exit 1; }
@@ -308,8 +337,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RECORD: ${{ steps.promote.outputs.record }}
           HOST: ${{ inputs.host_name }}
-          SHA: ${{ inputs.sha }}
-          DBS: ${{ inputs.upgrade_databases }}
+          SHA: ${{ needs.gate.outputs.sha }}
+          DBS: ${{ needs.gate.outputs.dbs }}
           MODULES: ${{ needs.gate.outputs.modules }}
         run: |
           ts=$(python3 -c 'import json,os;print(json.loads(os.environ["RECORD"])["timestamp"])')
@@ -323,10 +352,10 @@ jobs:
         if: inputs.dry_run
         env:
           HOST: ${{ inputs.host_name }}
-          SHA: ${{ inputs.sha }}
+          SHA: ${{ needs.gate.outputs.sha }}
           ROLLBACK: ${{ needs.gate.outputs.rollback }}
         run: |
-          { echo "## Dry run against $HOST"; echo; echo "Gate passed for \`$SHA\` (rollback: $ROLLBACK). Backup taken, preview printed, nothing changed."; echo; echo '```'; sed -n '/^== modules/,/^== dry run/p' deploy.log; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          { echo "## Dry run against $HOST"; echo; echo "Gate passed for \`$SHA\` (rollback: $ROLLBACK). Preview printed, nothing changed."; echo; echo '```'; sed -n '/^== modules/,/^== dry run/p' deploy.log; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Cleanup SSH key
         if: always()
