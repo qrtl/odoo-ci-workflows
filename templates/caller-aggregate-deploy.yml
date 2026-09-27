@@ -1,5 +1,6 @@
 # Copy this file to your project's aggregate-config branch at:
 #   .github/workflows/aggregate.yml
+# and, identical, to the default branch: a schedule only fires from there.
 #
 # For self-hosted staging projects that need aggregate + deploy.
 # Replace all <PLACEHOLDER> values before use.
@@ -13,6 +14,10 @@ on:
       - "repos.yml"
       - ".github/workflows/**"
   workflow_dispatch:
+  # Nightly, before the staging restore rehearses the snapshot: lines of PRs merged
+  # since are dropped from repos.yml, so the snapshot is promotable without a push.
+  schedule:
+    - cron: "0 18 * * *"
 
 concurrency:
   group: aggregate-config
@@ -29,6 +34,9 @@ jobs:
 
   deploy:
     needs: aggregate
+    # A run that produced no new snapshot (nightly, or a workflow-file push) has
+    # nothing to deploy; a manual run always deploys.
+    if: needs.aggregate.outputs.changed == 'true' || github.event_name == 'workflow_dispatch'
     uses: qrtl/odoo-ci-workflows/.github/workflows/deploy-staging.yml@main
     with:
       staging_host: "<STAGING_HOST>"

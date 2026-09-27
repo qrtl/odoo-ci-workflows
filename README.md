@@ -11,6 +11,16 @@ using [git-aggregator](https://github.com/acsone/git-aggregator). All addon
 repos (oca, custom, private) are merged into a single branch with embedded
 `.git` directories removed.
 
+Before aggregating, every uncommented `refs/pull/N/head` line whose PR is merged
+is commented out (`(MERGED)`) and the cleaned `repos.yml` is pushed back to the
+config branch with `[skip ci]`: the base branch already carries the change, and
+the production gate refuses a snapshot built with such lines. A private repo's
+line is checked with the credential in its own URL. The caller template also runs
+nightly, before the staging restore, so a PR merged during the day is dropped
+and rehearsed without anyone pushing; a schedule fires only from the default
+branch, so the caller is kept identical there. The job reports `changed`, and the
+template deploys only on a new snapshot or a manual run.
+
 ### deploy-staging.yml
 
 Deploys the `_git_aggregated` branch to a staging server via SSH. Pulls the
