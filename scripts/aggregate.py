@@ -45,7 +45,7 @@ def drop_merged_pr_lines(cfg_text, token):
             remotes = {}
         m = re.match(r"^\s+([\w-]+):\s*(\S*github\.com\S+)", line)
         if m:
-            remotes[m[1]] = m[2]
+            remotes[m[1]] = m[2].strip("\"'")
         m = re.match(r"^(\s*)-\s*([\w-]+)\s+refs/pull/(\d+)/head\b", line)
         if m and m[2] in remotes and pr_merged(remotes[m[2]], m[3], token):
             body = line[len(m[1]):].rstrip()

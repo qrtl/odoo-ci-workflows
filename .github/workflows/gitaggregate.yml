@@ -23,6 +23,10 @@ on:
         description: Python version for the runner
         type: string
         default: "3.11"
+    outputs:
+      changed:
+        description: Whether a new snapshot was pushed
+        value: ${{ jobs.aggregate.outputs.changed }}
 
 concurrency:
   group: aggregate-${{ github.repository }}
