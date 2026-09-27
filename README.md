@@ -15,11 +15,10 @@ Before aggregating, every uncommented `refs/pull/N/head` line whose PR is merged
 is commented out (`(MERGED)`) and the cleaned `repos.yml` is pushed back to the
 config branch with `[skip ci]`: the base branch already carries the change, and
 the production gate refuses a snapshot built with such lines. A private repo's
-line is checked with the credential in its own URL. The caller template also runs
-nightly, before the staging restore, so a PR merged during the day is dropped
-and rehearsed without anyone pushing; a schedule fires only from the default
-branch, so the caller is kept identical there. The job reports `changed`, and the
-template deploys only on a new snapshot or a manual run.
+line is checked with the credential in its own URL. A merge reaches staging when
+`/merge-pr` drops its line or dispatches this workflow, and production through
+`/promote`. The job reports `changed`, and the template deploys only on a new
+snapshot or a manual run.
 
 ### deploy-staging.yml
 
