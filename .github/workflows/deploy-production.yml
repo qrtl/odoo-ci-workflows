@@ -291,6 +291,7 @@ jobs:
           #    keeps running the old code; only files read per request (static
           #    assets) come from the new tree before the restart.
           echo "== reset"
+          running=${LAST_SHA:-$current}   # what the service runs: a pending promotion never restarted it
           printf '%s\n' "$SHA" | sudo -n tee /odoo/promotion.pending >/dev/null
           sudo -n -u odoo git -C "$PROJECT_DIR" reset -q --hard "$SHA"
 
@@ -305,7 +306,7 @@ jobs:
             echo "== upgrading $db"
             docker run --rm --volumes-from "$SERVICE" -e PYTHONPATH="$SRC" -u odoo "$image_id" \
               click-odoo-update -c /odoo/etc/odoo.conf -d "$db" "${args[@]}" \
-              || { sudo -n -u odoo git -C "$PROJECT_DIR" reset -q --hard "$current"; echo "upgrading $db failed: checkout put back to $current, the code the service still runs; promote again once fixed" >&2; exit 1; }
+              || { sudo -n -u odoo git -C "$PROJECT_DIR" reset -q --hard "$running"; echo "upgrading $db failed: checkout put back to $running, the code the service still runs; promote again once fixed" >&2; exit 1; }
           done
 
           # 7. Restart, the only downtime, and wait for Odoo to listen (the
