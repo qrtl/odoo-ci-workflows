@@ -295,8 +295,9 @@ jobs:
           sudo -n -u odoo git -C "$PROJECT_DIR" reset -q --hard "$SHA"
 
           # 6. Upgrade every database in a one-off container from the same image and
-          #    volumes. Until the restart, requests run the old code on the new
-          #    schema, which step 3 keeps to changes that do not rewrite data.
+          #    volumes. Until the restart, requests run the old code against the
+          #    updated fields and records and some may fail: the accepted price of
+          #    restart-only downtime. Step 3 only keeps data-rewriting changes out.
           printf '%s upgrading\n' "$SHA" | sudo -n tee /odoo/promotion.pending >/dev/null
           args=(--ignore-core-addons --watcher-max-seconds 30 --logfile=/dev/stdout)
           [ "$I18N" = true ] && args+=(--i18n-overwrite)
