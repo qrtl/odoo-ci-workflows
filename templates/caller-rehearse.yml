@@ -2,8 +2,8 @@
 #   .github/workflows/rehearse.yml
 #
 # Rehearses the code staging runs on the copy database, on demand: the nightly
-# restore, dispatched by hand. Run it before promoting; the promotion refuses a
-# commit the copy has not rehearsed.
+# restore, dispatched by hand. Run it before promoting and read its summary;
+# the promotion does not check it.
 # Replace all <PLACEHOLDER> values before use.
 
 name: Rehearse on the copy database

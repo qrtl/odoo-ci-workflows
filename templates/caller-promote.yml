@@ -2,8 +2,8 @@
 # this caller; also put it on the default branch so the workflow is listed) at:
 #   .github/workflows/promote.yml
 #
-# Promotes one aggregated commit that the copy database has rehearsed to the
-# production host. PRODUCTION_SSH_KEY is a secret of the repo's `production`
+# Promotes one aggregated commit, by default the release snapshot, to the
+# production host. Rehearse first and read its summary; Promote does not check it. PRODUCTION_SSH_KEY is a secret of the repo's `production`
 # environment. A private repo's environment cannot require reviewers below the
 # Enterprise plan, so three settings keep the key to the promoters: the
 # environment's branch policy releases it only to runs from `promotion`,
@@ -21,10 +21,10 @@ on:
   workflow_dispatch:
     inputs:
       sha:
-        description: The aggregated commit to deploy (full 40-hex id); empty promotes the commit staging last rehearsed
+        description: The aggregated commit to deploy (full 40-hex id); empty promotes the release snapshot
         required: false
       upgrade_databases:
-        description: Every production database, space-separated; empty means the ones the rehearsal covered
+        description: Every production database, space-separated; empty means the ones the last deploy upgraded
         required: false
       dry_run:
         description: Stop after the preview; change nothing
@@ -45,12 +45,9 @@ jobs:
       production_port: "<PRODUCTION_PORT>"
       production_user: <PRODUCTION_USER>
       host_name: <PROJECT>-prod
-      staging_host: "<STAGING_HOST>"
-      staging_port: "<STAGING_PORT>"
-      staging_user: <STAGING_USER>
       sha: ${{ inputs.sha }}
       upgrade_databases: ${{ inputs.upgrade_databases }}
-      # Must equal upgrade_i18n_overwrite in the staging host's restore.conf.
+      # As on staging (upgrade_i18n_overwrite in restore.conf, i18n_overwrite in aggregate.yml).
       i18n_overwrite: true
       dry_run: ${{ inputs.dry_run }}
       republish: ${{ inputs.republish }}

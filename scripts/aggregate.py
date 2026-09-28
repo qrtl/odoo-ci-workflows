@@ -20,6 +20,9 @@ def rm_tree(p: Path):
         shutil.rmtree(p)
 
 
+PR_LINE = re.compile(r"^(\s*)(-\s*([\w-]+)\s+refs/pull/(\d+)/head\b)", re.M)
+
+
 def pr_merged(remote_url, number, base, token):
     """True when PR `number` is merged into `base`, the branch the section aggregates."""
     m = re.search(r"github\.com[:/]([^/\s]+)/([^/\s]+?)(?:\.git)?/?$", remote_url)
@@ -50,13 +53,52 @@ def drop_merged_pr_lines(cfg_text, token):
         m = re.match(r"^\s*-\s*([\w-]+)\s+(\S+)", line)
         if m and not m[2].startswith("refs/pull/"):
             bases[m[1]] = m[2]
-        m = re.match(r"^(\s*)-\s*([\w-]+)\s+refs/pull/(\d+)/head\b", line)
-        if m and m[2] in remotes and m[2] in bases and pr_merged(remotes[m[2]], m[3], bases[m[2]], token):
+        m = PR_LINE.match(line)
+        if m and m[3] in remotes and m[3] in bases and pr_merged(remotes[m[3]], m[4], bases[m[3]], token):
             body = line[len(m[1]):].rstrip()
             line = f"{m[1]}#{body}{'' if ' #' in body else '  #'} (MERGED)\n"
-            dropped.append(m[3])
+            dropped.append(m[4])
         out.append(line)
     return "".join(out), dropped
+
+
+def snapshot(repo, branch, dirs, cfg_text, message):
+    """Aggregate `cfg_text` in the clone at `repo` and push the tree as `branch`.
+    Returns the branch's commit and whether it is new."""
+    try:
+        run("git", "fetch", "origin", branch, cwd=repo)
+        run("git", "checkout", "-B", branch, f"origin/{branch}", cwd=repo)
+    except subprocess.CalledProcessError:
+        run("git", "checkout", "-B", branch, cwd=repo)
+
+    # Wipe everything except .git so the branch contains only aggregated output
+    for item in repo.iterdir():
+        if item.name == ".git":
+            continue
+        if item.is_dir():
+            shutil.rmtree(item)
+        else:
+            item.unlink()
+    run("git", "rm", "-rf", "--cached", "--ignore-unmatch", ".", cwd=repo)
+
+    (repo / "repos.yml").write_text(cfg_text, encoding="utf-8")
+    run("gitaggregate", "-c", "repos.yml", cwd=repo)
+    # Keep the recipe in the snapshot so the commit says what went into it: the
+    # production promotion refuses a candidate built with refs/pull lines. With
+    # any credential stripped from the URLs - the branch is deployed to hosts.
+    (repo / "repos.yml").write_text(re.sub(r"(https?://)[^/\s@]+@", r"\1", cfg_text), encoding="utf-8")
+
+    # Remove inner .git dirs so aggregated repos become plain directories
+    for d in dirs:
+        rm_tree(repo / d / ".git")
+
+    run("git", "add", "-A", cwd=repo)
+    if subprocess.call(["git", "diff", "--cached", "--quiet"], cwd=repo) == 0:
+        print(f"{branch}: no changes staged. Skip commit/push.")
+        return sh("git", "rev-parse", "HEAD", cwd=repo), False
+    run("git", "commit", "-m", message, cwd=repo)
+    run("git", "push", "origin", branch, "--force-with-lease", cwd=repo)
+    return sh("git", "rev-parse", "HEAD", cwd=repo), True
 
 
 def main():
@@ -89,13 +131,7 @@ def main():
     if not isinstance(data, dict):
         raise SystemExit("repos.yml top level must be a mapping")
 
-    out_dirs = []
-    for k, v in data.items():
-        origin = (v or {}).get("remotes", {}).get("origin")
-        if origin:
-            out_dirs.append(k.replace("./", ""))
-
-    if not out_dirs:
+    if not any((v or {}).get("remotes", {}).get("origin") for v in data.values()):
         raise SystemExit("repos.yml: no remotes.origin found")
 
     work = Path("_work")
@@ -115,52 +151,20 @@ def main():
     repo = work / "repo"
     run("git", "clone", repo_url, str(repo))
 
-    # target branch を checkout（無ければ作る）
-    try:
-        run("git", "fetch", "origin", target_branch, cwd=repo)
-        run("git", "checkout", "-B", target_branch, f"origin/{target_branch}", cwd=repo)
-    except subprocess.CalledProcessError:
-        run("git", "checkout", "-B", target_branch, cwd=repo)
-
-    # Wipe everything except .git so the branch contains only aggregated output
-    for item in repo.iterdir():
-        if item.name == ".git":
-            continue
-        if item.is_dir():
-            shutil.rmtree(item)
-        else:
-            item.unlink()
-    run("git", "rm", "-rf", "--cached", "--ignore-unmatch", ".", cwd=repo)
-
-    out_dirs = [k.replace("./", "") for k in data.keys()]
-
-    (repo / "repos.yml").write_text(cfg_text, encoding="utf-8")
-    run("gitaggregate", "-c", "repos.yml", cwd=repo)
-    # Keep the recipe in the snapshot so the commit says what went into it: the
-    # production promotion refuses a candidate built with refs/pull lines. With
-    # any credential stripped from the URLs - the branch is deployed to hosts.
-    (repo / "repos.yml").write_text(re.sub(r"(https?://)[^/\s@]+@", r"\1", cfg_text), encoding="utf-8")
-
-    # Remove inner .git dirs so aggregated repos become plain directories
-    for d in out_dirs:
-        rm_tree(repo / d / ".git")
-
-    # (F) stage everything first
-    run("git", "add", "-A", cwd=repo)
-
-    # (F2) if nothing staged, do not commit/push
-    rc = subprocess.call(["git", "diff", "--cached", "--quiet"], cwd=repo)
+    # The release snapshot (the recipe without its refs/pull lines) is what
+    # production promotes; the staging snapshot is the full recipe, or the same
+    # commit when they match.
+    dirs = [k.replace("./", "") for k in data]
+    release_cfg = PR_LINE.sub(r"\1#\2", cfg_text)
+    release, _ = snapshot(repo, f"{target_branch}_release", dirs, release_cfg, commit_message)
+    if release_cfg == cfg_text:
+        changed = sh("git", "ls-remote", "origin", f"refs/heads/{target_branch}", cwd=repo).split("\t")[0] != release
+        run("git", "push", "origin", f"{release}:refs/heads/{target_branch}", "--force", cwd=repo)
+    else:
+        _, changed = snapshot(repo, target_branch, dirs, cfg_text, commit_message)
     if os.environ.get("GITHUB_OUTPUT"):
         with open(os.environ["GITHUB_OUTPUT"], "a") as f:
-            f.write(f"changed={'false' if rc == 0 else 'true'}\n")
-    if rc == 0:
-        print("No changes staged. Skip commit/push.")
-        return
-
-    # (G) commit & push
-    run("git", "commit", "-m", commit_message, cwd=repo)
-    run("git", "push", "origin", target_branch, "--force-with-lease", cwd=repo)
-
+            f.write(f"changed={'true' if changed else 'false'}\n")
 
 if __name__ == "__main__":
     main()
