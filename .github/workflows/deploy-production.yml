@@ -116,8 +116,9 @@ jobs:
           dbs = " ".join(os.environ["DBS"].split()) or last.get("databases", "")
           if not dbs or "auto" in dbs.split(): sys.exit("upgrade_databases must name every production database; auto is refused")
           if not re.fullmatch(r"[\w-]+( [\w-]+)*", dbs): sys.exit("upgrade_databases must be plain names separated by single spaces")
-          if sha == last.get("sha") and set(dbs.split()) != set(last["databases"].split()):
-              sys.exit(f"a rollback upgrades the databases that deploy did ({last['databases']}), not {dbs}")
+          # The checkout is shared: a database left out would run new code on its old schema.
+          if last and not set(dbs.split()) >= set(last["databases"].split()):
+              sys.exit(f"upgrade_databases drops some of the last deploy's ({last['databases']}): name every database")
           for k, v in (("sha", sha), ("dbs", dbs), ("last_sha", last.get("sha", ""))):
               if re.search(r"[\x00-\x1f\x7f]", v): sys.exit(f"{k} contains control characters")
               print(f"{k}={v}")
