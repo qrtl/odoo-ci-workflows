@@ -69,7 +69,9 @@ def snapshot(repo, branch, dirs, cfg_text, message):
         run("git", "fetch", "origin", branch, cwd=repo)
         run("git", "checkout", "-B", branch, f"origin/{branch}", cwd=repo)
     except subprocess.CalledProcessError:
-        run("git", "checkout", "-B", branch, cwd=repo)
+        # A new branch starts its own history: the promotion accepts any commit
+        # behind the release branch, so no other commit may be its ancestor.
+        run("git", "checkout", "--orphan", branch, cwd=repo)
 
     # Wipe everything except .git so the branch contains only aggregated output
     for item in repo.iterdir():
