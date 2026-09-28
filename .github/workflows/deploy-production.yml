@@ -122,6 +122,17 @@ jobs:
               if re.search(r"[\x00-\x1f\x7f]", v): sys.exit(f"{k} contains control characters")
               print(f"{k}={v}")
           PY
+      # Only a release snapshot, or the last deploy (a rollback), may reach the
+      # host: any other commit with a benign repos.yml, aggregate-config's for
+      # one, would be reset onto production as it is.
+      - name: Refuse a commit that is not a release snapshot
+        if: steps.req.outputs.sha != steps.req.outputs.last_sha
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ steps.req.outputs.sha }}
+        run: |
+          status=$(gh api "repos/${{ github.repository }}/compare/${{ inputs.release_branch }}...$SHA" --jq .status 2>/dev/null || echo unknown)
+          case "$status" in identical|behind) ;; *) echo "$SHA is not on ${{ inputs.release_branch }} ($status): promote a release snapshot" >&2; exit 1;; esac
       - name: Refuse a candidate built with PRs under test
         env:
           GH_TOKEN: ${{ github.token }}
