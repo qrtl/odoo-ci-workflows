@@ -17,8 +17,12 @@ config branch with `[skip ci]`: the base branch already carries the change, and
 the production gate refuses a snapshot built with such lines. A private repo's
 line is checked with the credential in its own URL. A merge reaches staging when
 `/merge-pr` drops its line or dispatches this workflow, and production through
-`/promote`. The job reports `changed`, and the template deploys only on a new
+`/deploy-prod`. The job reports `changed`, and the template deploys only on a new
 snapshot or a manual run.
+
+Every run also pushes `_git_aggregated_release`, the recipe with its
+`refs/pull/N/head` lines commented out: what production promotes while staging
+tests PRs. With no PR lines the two branches share one commit.
 
 ### deploy-staging.yml
 
@@ -51,7 +55,8 @@ restore, on demand. The copy database is rebuilt from the latest production back
 and upgraded against the code staging runs with the same `click-odoo-update`
 command production is promoted with. The script's rehearsal record is checked and
 published on the run, and the rehearsed commit is tagged `rehearsed/<host>/<time>`.
-Caller: `templates/caller-rehearse.yml`.
+Run it before a promotion and read its summary: Promote does not check it. Caller:
+`templates/caller-rehearse.yml`.
 
 ### deploy-production.yml
 
@@ -66,15 +71,11 @@ the caller job runs only when both `github.actor` and `github.triggering_actor`
 dispatch is the approval. Dispatch from the `promotion` ref (`--ref promotion`,
 or "Use workflow from" in the Actions UI); both default to the default branch,
 whose copy of the caller only exists to list the workflow and is refused the
-environment. With no inputs it promotes the commit staging last rehearsed, to the
-databases that rehearsal covered. A **gate** job refuses unless the last
-rehearsal record names the commit with a clean result, its backup postdates the
-current deploy, it covered exactly the requested databases with the requested
-translation flag, and the commit's own `repos.yml` has no uncommented
-`refs/pull/N/head` line. The previous deploy's commit is accepted as a rollback
-without a fresh rehearsal. The **deploy** job then, on the host: takes
-the shared lock, checks the running image is the one rehearsed under, fetches the
-commit, refuses a change that carries `migrations/` or `upgrades/` scripts (those go
+environment. With no inputs it promotes the release snapshot, to the databases the last
+deploy upgraded. A **gate** job refuses a candidate whose own `repos.yml` has an
+uncommented `refs/pull/N/head` line, and a rollback to the last deploy's commit
+that names other databases. The **deploy** job then, on the host: takes
+the shared lock, fetches the commit, refuses a change that carries `migrations/` or `upgrades/` scripts (those go
 by hand, in a window), prints the preview (`dry_run` stops here;
 `republish` only recreates the tag of a commit already deployed, when its run lost that step),
 resets the checkout, upgrades every database in a one-off container while Odoo
