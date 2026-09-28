@@ -183,6 +183,9 @@ jobs:
           SRC: ${{ inputs.odoo_source_path }}
           HTTP_PORT: ${{ inputs.http_port }}
         run: |
+          # The default shell has no pipefail: without it the step takes tee's
+          # status, and a failed promotion would show green.
+          set -o pipefail
           {
             for v in SHA DBS I18N DRY_RUN REPUBLISH LAST_SHA PROJECT_DIR SERVICE SRC HTTP_PORT; do
               printf '%s=%q\n' "$v" "${!v}"
@@ -266,8 +269,12 @@ jobs:
           [ "$I18N" = true ] && args+=(--i18n-overwrite)
           for db in $DBS; do
             echo "== upgrading $db"
-            docker run --rm --volumes-from "$SERVICE" -e PYTHONPATH="$SRC" -u odoo "$image_id" \
-              click-odoo-update -c /odoo/etc/odoo.conf -d "$db" "${args[@]}" \
+            # --entrypoint: the image's entrypoint runs odoo-bin with whatever
+            # follows the image name, so click-odoo-update would reach odoo-bin
+            # as arguments. (restore.sh uses docker exec, which bypasses it.)
+            docker run --rm --volumes-from "$SERVICE" -e PYTHONPATH="$SRC" -u odoo \
+              --entrypoint click-odoo-update "$image_id" \
+              -c /odoo/etc/odoo.conf -d "$db" "${args[@]}" \
               || { sudo -n -u odoo git -C "$PROJECT_DIR" reset -q --hard "$running"; echo "upgrading $db failed: checkout put back to $running, the code the service still runs; promote again once fixed" >&2; exit 1; }
           done
 
