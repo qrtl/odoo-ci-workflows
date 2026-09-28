@@ -65,8 +65,11 @@ on:
         type: string
         default: "8069"
     secrets:
+      # Not required here: the key lives on the caller's `production`
+      # environment, which only the deploy job enters. A required secret is
+      # checked at call time, before any environment, and fails the whole run.
       PRODUCTION_SSH_KEY:
-        required: true
+        required: false
 
 jobs:
   gate:
@@ -157,8 +160,12 @@ jobs:
       contents: write
     steps:
       - name: Configure SSH
+        env:
+          KEY: ${{ secrets.PRODUCTION_SSH_KEY }}
+          ENV_NAME: ${{ inputs.environment }}
         run: |
-          printf '%s\n' "${{ secrets.PRODUCTION_SSH_KEY }}" > .prod_key && chmod 600 .prod_key
+          [ -n "$KEY" ] || { echo "::error::PRODUCTION_SSH_KEY is not set on the $ENV_NAME environment"; exit 1; }
+          printf '%s\n' "$KEY" > .prod_key && chmod 600 .prod_key
 
       # Values reach the remote shell as %q-quoted assignments on stdin, never on
       # the ssh command line (see deploy-staging.yml for why).
