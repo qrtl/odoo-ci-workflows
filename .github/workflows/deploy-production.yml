@@ -230,6 +230,19 @@ jobs:
           fi
           image_id=$(docker inspect --format '{{.Image}}' "$SERVICE")
           sudo -n -u odoo git -C "$PROJECT_DIR" fetch -q origin "$SHA"
+          # Odoo must load the checkout this run resets. A host still on per-repo
+          # clones would upgrade and restart on its old code while the record
+          # claims $SHA (qrtl-prod, 2026-09-28). addons_path is read through the
+          # container's mounts, as Odoo reads it (the code is mounted at the same path
+          # there), from a one-off container so a stopped service can still be fixed.
+          loaded=$(docker run --rm --volumes-from "$SERVICE" --entrypoint python3 "$image_id" -c "import configparser; c = configparser.ConfigParser(interpolation=None); c.read('/odoo/etc/odoo.conf'); print(' '.join(p.strip() for p in c['options']['addons_path'].split(',') if p.strip()))")
+          dirs=$(sudo -n -u odoo git -C "$PROJECT_DIR" show "$SHA:repos.yml" | sed -n 's#^\./\([^:]*\):.*#\1#p')
+          [ -n "$dirs" ] || { echo "no directories found in $SHA:repos.yml" >&2; exit 1; }
+          missing=""
+          for d in $dirs; do
+            case " $loaded " in *" $PROJECT_DIR/$d "*) ;; *) missing="$missing $PROJECT_DIR/$d";; esac
+          done
+          [ -z "$missing" ] || { echo "Odoo does not load$missing (addons_path: $loaded): cut the host over to $PROJECT_DIR first (odoo-ansible playbooks/production-code-cutover.yml)" >&2; exit 1; }
           # A checkout at neither the last deploy nor the candidate was moved by hand:
           # only a rollback, or a retry of that very commit, may proceed from here.
           if [ -n "$LAST_SHA" ] && [ "$SHA" != "$LAST_SHA" ] && [ "$current" != "$LAST_SHA" ] && [ "$current" != "$SHA" ]; then
