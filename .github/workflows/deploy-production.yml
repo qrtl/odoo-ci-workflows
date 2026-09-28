@@ -129,7 +129,14 @@ jobs:
         run: |
           gh api "repos/${{ github.repository }}/contents/repos.yml?ref=$SHA" --jq .content 2>/dev/null | base64 -d > recipe.yml \
             || { echo "commit $SHA carries no repos.yml: aggregate again so the snapshot records its recipe" >&2; exit 1; }
-          ! grep -nE '^\s*[^#[:space:]].*\brefs/pull/' recipe.yml || { echo "the candidate was built with a refs/pull merge (above): merge or drop it and aggregate again" >&2; exit 1; }
+          python3 -c 'import yaml' 2>/dev/null || pip install -q pyyaml
+          python3 - <<'PY'
+          import sys, yaml
+          # The parsed values, not the text: a YAML escape could spell refs/pull past a grep.
+          for name, r in (yaml.safe_load(open("recipe.yml")) or {}).items():
+              for v in [r.get("target"), *(r.get("merges") or [])]:
+                  if "refs/pull/" in str(v): sys.exit(f"the candidate was built with a refs/pull merge ({name}: {v}): merge or drop it and aggregate again")
+          PY
   deploy:
     needs: gate
     runs-on: ubuntu-latest
