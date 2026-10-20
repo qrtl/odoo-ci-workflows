@@ -15,7 +15,12 @@ Before aggregating, every uncommented `refs/pull/N/head` line whose PR is merged
 is commented out (`(MERGED)`) and the cleaned `repos.yml` is pushed back to the
 config branch with `[skip ci]`: the base branch already carries the change, and
 the production gate refuses a snapshot built with such lines. A private repo's
-line is checked with the credential in its own URL. A merge reaches staging when
+line is checked with the credential in its own URL, or with the run's token when
+the URL has none.
+
+The calling `*-private` repo can be named by its plain URL
+(`https://github.com/qrtl/<project>-private.git`): the run's own token is used to
+fetch it. Only another private repo needs a credential in its URL. A merge reaches staging when
 `/merge-pr` drops its line or dispatches this workflow, and production through
 `/deploy-prod`. The job reports `changed`, and the template deploys only on a new
 snapshot or a manual run.
@@ -125,7 +130,7 @@ gate can read what a candidate was built from.
 
    ./addons/private:
      remotes:
-       origin: https://<PAT>@github.com/qrtl/<project>-private.git
+       origin: https://github.com/qrtl/<project>-private.git
      merges:
        - origin <version>
    ```
