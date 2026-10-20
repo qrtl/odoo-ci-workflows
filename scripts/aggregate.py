@@ -142,6 +142,16 @@ def main():
 
     os.environ["GIT_TERMINAL_PROMPT"] = "0"
 
+    # The run's token reads this repository, so repos.yml can name it by its
+    # plain URL instead of embedding a credential that can expire.
+    own = os.environ.get("GITHUB_REPOSITORY")
+    if own:
+        run(
+            "git", "config", "--global",
+            f"url.https://x-access-token:{token}@github.com/{own}.insteadOf",
+            f"https://github.com/{own}",
+        )
+
     # NNN-private を token付き HTTPS で clone（origin をいじらず push まで通す）
     repo_url = sh("git", "remote", "get-url", "origin")  # checkout済みのこのrepo
     # 例: https://github.com/ORG/NNN-private.git
