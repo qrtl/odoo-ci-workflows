@@ -145,17 +145,6 @@ def main():
 
     os.environ["GIT_TERMINAL_PROMPT"] = "0"
 
-    # Fetches of the organization's repos by their plain URL go through the read
-    # token, so repos.yml carries no credential. Set after the push above: a rule
-    # also rewrites pushes, and the App token cannot write.
-    # Without the App, GITHUB_TOKEN covers this repo alone.
-    own = os.environ.get("GITHUB_REPOSITORY", "")
-    if own:
-        org = own.split("/")[0]
-        prefix = f"https://github.com/{org}/" if os.environ.get("AGG_APP_TOKEN") else f"https://github.com/{own}"
-        authed = prefix.replace("https://", f"https://x-access-token:{read_token}@", 1)
-        run("git", "config", "--global", f"url.{authed}.insteadOf", prefix)
-
     # NNN-private を token付き HTTPS で clone（origin をいじらず push まで通す）
     repo_url = sh("git", "remote", "get-url", "origin")  # checkout済みのこのrepo
     # 例: https://github.com/ORG/NNN-private.git
@@ -166,6 +155,16 @@ def main():
 
     repo = work / "repo"
     run("git", "clone", repo_url, str(repo))
+
+    # Fetches of the organization's repos by their plain URL go through the read
+    # token, so repos.yml carries no credential. Set only now: a rule also
+    # rewrites `remote get-url` and pushes, and the App token cannot write.
+    own = os.environ.get("GITHUB_REPOSITORY")
+    if own:
+        org = own.split("/")[0]
+        prefix = f"https://github.com/{org}/" if os.environ.get("AGG_APP_TOKEN") else f"https://github.com/{own}"
+        authed = prefix.replace("https://", f"https://x-access-token:{read_token}@", 1)
+        run("git", "config", "--global", f"url.{authed}.insteadOf", prefix)
 
     # The release snapshot (the recipe without its refs/pull lines) is what
     # production promotes; the staging snapshot is the full recipe, or the same
