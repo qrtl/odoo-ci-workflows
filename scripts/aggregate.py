@@ -123,9 +123,12 @@ def main():
 
     cfg_path = Path(sys.argv[1])
     cfg_text = cfg_path.read_text(encoding="utf-8")
+    data = yaml.safe_load(cfg_text) or {}
+    if not isinstance(data, dict):
+        raise SystemExit("repos.yml top level must be a mapping")
     # The App token is the one credential; one in a URL would be committed with
     # the recipe and deployed with the snapshot. Named by section, never printed.
-    for name, section in (yaml.safe_load(cfg_text) or {}).items():
+    for name, section in data.items():
         for remote, url in ((section or {}).get("remotes") or {}).items():
             if re.match(r"https?://[^/\s]+@", str(url)):
                 raise SystemExit(f"repos.yml: {name} remote {remote} embeds a credential; name it by its plain URL")
@@ -137,9 +140,6 @@ def main():
         # A developer's push in the same minute wins; the next run drops the lines again.
         if subprocess.call(["git", "push", "origin", f"HEAD:refs/heads/{config_branch}"]) != 0:
             print("WARNING could not push the cleaned repos.yml; aggregating from it anyway")
-    data = yaml.safe_load(cfg_text) or {}
-    if not isinstance(data, dict):
-        raise SystemExit("repos.yml top level must be a mapping")
 
     if not any((v or {}).get("remotes", {}).get("origin") for v in data.values()):
         raise SystemExit("repos.yml: no remotes.origin found")

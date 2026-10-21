@@ -31,7 +31,7 @@ runs:
       if: inputs.app-id == '' || inputs.private-key == ''
       shell: bash
       run: |
-        echo "::error::The qrtl-aggregate App is not set up for $GITHUB_REPOSITORY: add the repo to the organization secret AGG_APP_PRIVATE_KEY's repository list (and the variable AGG_APP_ID's), and pass secrets: inherit to the reusable workflow"
+        echo "::error::The qrtl-aggregate App is not set up for $GITHUB_REPOSITORY: add the repo to the organization secret AGG_APP_PRIVATE_KEY's repository list, check the organization variable AGG_APP_ID exists, and pass secrets: inherit to the reusable workflow"
         exit 1
 
     - id: app
