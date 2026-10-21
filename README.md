@@ -14,13 +14,18 @@ repos (oca, custom, private) are merged into a single branch with embedded
 Before aggregating, every uncommented `refs/pull/N/head` line whose PR is merged
 is commented out (`(MERGED)`) and the cleaned `repos.yml` is pushed back to the
 config branch with `[skip ci]`: the base branch already carries the change, and
-the production gate refuses a snapshot built with such lines. A private repo's
-line is checked with the credential in its own URL, or with the run's token when
-the URL has none.
+the production gate refuses a snapshot built with such lines.
 
-The calling `*-private` repo can be named by its plain URL
-(`https://github.com/qrtl/<project>-private.git`): the run's own token is used to
-fetch it. Only another private repo needs a credential in its URL. A merge reaches staging when
+`repos.yml` names every repo by its plain URL
+(`https://github.com/qrtl/<project>-private.git`), with no credential. Each run
+mints a token of the `qrtl-aggregate` GitHub App (read-only on contents and pull
+requests, installed on the organization) and fetches every `qrtl` repo, and reads
+their PRs, through it. The App's id is the organization variable `AGG_APP_ID` and
+its key the organization secret `AGG_APP_PRIVATE_KEY`; the caller passes them with
+`secrets: inherit`. Without them the run's own `GITHUB_TOKEN` is used, which reads
+only the calling repo. A URL that still embeds a credential keeps working.
+
+A merge reaches staging when
 `/merge-pr` drops its line or dispatches this workflow, and production through
 `/deploy-prod`. The job reports `changed`, and the template deploys only on a new
 snapshot or a manual run.

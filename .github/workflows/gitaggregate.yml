@@ -57,10 +57,21 @@ jobs:
 
       - run: pip install git-aggregator pyyaml
 
+      # Reads the organization's private repos; skipped where the App is not set up.
+      - name: Mint the qrtl-aggregate token
+        id: app
+        if: ${{ vars.AGG_APP_ID != '' }}
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ vars.AGG_APP_ID }}
+          private-key: ${{ secrets.AGG_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
       - name: Build addons and push to ${{ inputs.target_branch }}
         id: build
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          AGG_APP_TOKEN: ${{ steps.app.outputs.token }}
           TARGET_BRANCH: ${{ inputs.target_branch }}
           CONFIG_BRANCH: ${{ inputs.config_branch }}
           COMMIT_MESSAGE: ${{ inputs.commit_message }}
