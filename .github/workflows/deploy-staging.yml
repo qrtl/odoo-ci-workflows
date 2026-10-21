@@ -66,8 +66,8 @@ on:
     secrets:
       STAGING_SSH_KEY:
         required: true
-      # Key of the qrtl-aggregate App (gitaggregate.yml); without it the host
-      # fetches with its own credential.
+      # Key of the qrtl-aggregate App (gitaggregate.yml), for the host's fetch.
+      # Not `required`: the next check names the fix instead of failing the call.
       AGG_APP_PRIVATE_KEY:
         required: false
 
@@ -79,10 +79,15 @@ jobs:
       HAS_APP_KEY: ${{ secrets.AGG_APP_PRIVATE_KEY != '' }}
 
     steps:
+      - name: Check the qrtl-aggregate key is shared with this repo
+        if: env.HAS_APP_KEY != 'true'
+        run: |
+          echo "::error::AGG_APP_PRIVATE_KEY is not shared with ${{ github.repository }}: add it to the organization secret's repository list, and pass secrets: inherit to this workflow"
+          exit 1
+
       # A one-hour token that reads this repo alone, for the host's fetch.
       - name: Mint the qrtl-aggregate token
         id: app
-        if: env.HAS_APP_KEY == 'true'
         uses: actions/create-github-app-token@v1
         with:
           app-id: ${{ vars.AGG_APP_ID }}
@@ -155,19 +160,16 @@ jobs:
           flock -w 1800 200 || { echo "Host lock $LOCKFILE held for 30 minutes; giving up"; exit 1; }
 
           cd "$project_dir"
-          if [ -n "$fetch_token" ]; then
-            # The run's read token reaches git through a credential helper reading
-            # a file only odoo can read: never on a command line or in the host's
-            # git config, and the host needs no GitHub credential of its own.
-            token_file=$(sudo -u odoo mktemp)
-            trap 'sudo -u odoo rm -f "$token_file"' EXIT
-            printf '%s' "$fetch_token" | sudo -u odoo tee "$token_file" >/dev/null
-            sudo -u odoo git -c credential.helper= \
-              -c "credential.helper=!f() { [ \"\$1\" = get ] || return 0; echo username=x-access-token; echo \"password=\$(cat $token_file)\"; }; f" \
-              fetch "https://github.com/$fetch_repo.git" "+refs/heads/$deploy_branch:refs/remotes/origin/$deploy_branch"
-          else
-            sudo -u odoo git fetch origin "$deploy_branch"
-          fi
+          # The run's read token reaches git through a credential helper reading a
+          # file only odoo can read: never on a command line or in the host's git
+          # config, and the host needs no GitHub credential of its own.
+          [ -n "$fetch_token" ] || { echo "no read token for the fetch" >&2; exit 1; }
+          token_file=$(sudo -u odoo mktemp)
+          trap 'sudo -u odoo rm -f "$token_file"' EXIT
+          printf '%s' "$fetch_token" | sudo -u odoo tee "$token_file" >/dev/null
+          sudo -u odoo git -c credential.helper= \
+            -c "credential.helper=!f() { [ \"\$1\" = get ] || return 0; echo username=x-access-token; echo \"password=\$(cat $token_file)\"; }; f" \
+            fetch "https://github.com/$fetch_repo.git" "+refs/heads/$deploy_branch:refs/remotes/origin/$deploy_branch"
           sudo -u odoo git reset --hard "origin/$deploy_branch"
           docker restart "$service_name"
 
