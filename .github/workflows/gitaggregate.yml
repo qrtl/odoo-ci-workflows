@@ -39,9 +39,6 @@ jobs:
       contents: write
     outputs:
       changed: ${{ steps.build.outputs.changed }}
-    env:
-      # Whether this repo may use the App's key; the key itself stays out of env.
-      HAS_APP_KEY: ${{ secrets.AGG_APP_PRIVATE_KEY != '' }}
 
     steps:
       - uses: actions/checkout@v4
@@ -60,15 +57,13 @@ jobs:
 
       - run: pip install git-aggregator pyyaml
 
-      # Reads the organization's private repos; skipped where the key is not shared.
+      # A token that reads the organization's repos, for every fetch.
       - name: Mint the qrtl-aggregate token
         id: app
-        if: env.HAS_APP_KEY == 'true'
-        uses: actions/create-github-app-token@v1
+        uses: qrtl/odoo-ci-workflows/.github/actions/qrtl-aggregate-token@main
         with:
           app-id: ${{ vars.AGG_APP_ID }}
           private-key: ${{ secrets.AGG_APP_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
 
       - name: Build addons and push to ${{ inputs.target_branch }}
         id: build

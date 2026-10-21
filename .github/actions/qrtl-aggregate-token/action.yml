@@ -1,0 +1,43 @@
+name: qrtl-aggregate token
+description: >
+  A one-hour token of the qrtl-aggregate GitHub App, read-only on contents and
+  pull requests: for the organization's repos (default) or the ones named.
+  Fails with the fix spelled out when the App's id or key is not available.
+
+inputs:
+  app-id:
+    description: The organization variable AGG_APP_ID
+    required: false
+    default: ""
+  private-key:
+    description: The organization secret AGG_APP_PRIVATE_KEY
+    required: false
+    default: ""
+  repositories:
+    description: Repos the token is limited to, comma-separated; empty for all
+    required: false
+    default: ""
+
+outputs:
+  token:
+    description: The token
+    value: ${{ steps.app.outputs.token }}
+
+runs:
+  using: composite
+  steps:
+    # Not `required` inputs: a missing value would only say "input required".
+    - name: Check the App is set up for this repo
+      if: inputs.app-id == '' || inputs.private-key == ''
+      shell: bash
+      run: |
+        echo "::error::The qrtl-aggregate App is not set up for $GITHUB_REPOSITORY: add the repo to the organization secret AGG_APP_PRIVATE_KEY's repository list (and the variable AGG_APP_ID's), and pass secrets: inherit to the reusable workflow"
+        exit 1
+
+    - id: app
+      uses: actions/create-github-app-token@v1
+      with:
+        app-id: ${{ inputs.app-id }}
+        private-key: ${{ inputs.private-key }}
+        owner: ${{ github.repository_owner }}
+        repositories: ${{ inputs.repositories }}

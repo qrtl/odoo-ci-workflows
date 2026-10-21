@@ -66,33 +66,23 @@ on:
     secrets:
       STAGING_SSH_KEY:
         required: true
-      # Key of the qrtl-aggregate App (gitaggregate.yml), for the host's fetch.
-      # Not `required`: the next check names the fix instead of failing the call.
+      # Key of the qrtl-aggregate App, for the host's fetch. Not `required`: the
+      # token action names the fix instead of failing the call.
       AGG_APP_PRIVATE_KEY:
         required: false
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    env:
-      # Whether this repo may use the App's key; the key itself stays out of env.
-      HAS_APP_KEY: ${{ secrets.AGG_APP_PRIVATE_KEY != '' }}
 
     steps:
-      - name: Check the qrtl-aggregate key is shared with this repo
-        if: env.HAS_APP_KEY != 'true'
-        run: |
-          echo "::error::AGG_APP_PRIVATE_KEY is not shared with ${{ github.repository }}: add it to the organization secret's repository list, and pass secrets: inherit to this workflow"
-          exit 1
-
-      # A one-hour token that reads this repo alone, for the host's fetch.
+      # A token that reads this repo alone, for the host's fetch.
       - name: Mint the qrtl-aggregate token
         id: app
-        uses: actions/create-github-app-token@v1
+        uses: qrtl/odoo-ci-workflows/.github/actions/qrtl-aggregate-token@main
         with:
           app-id: ${{ vars.AGG_APP_ID }}
           private-key: ${{ secrets.AGG_APP_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
 
       - name: Configure SSH

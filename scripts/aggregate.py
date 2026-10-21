@@ -28,9 +28,7 @@ def pr_merged(remote_url, number, base, token):
     m = re.search(r"github\.com[:/]([^/\s]+)/([^/\s]+?)(?:\.git)?/?$", remote_url)
     if not m:
         return None
-    # A URL may still carry its own credential; otherwise the read token is used.
-    cred = re.search(r"https?://([^@/\s]+)@", remote_url)
-    env = dict(os.environ, GH_TOKEN=cred.group(1).split(":")[-1] if cred else token)
+    env = dict(os.environ, GH_TOKEN=token)
     try:
         out = subprocess.check_output(["gh", "api", f"repos/{m[1]}/{m[2]}/pulls/{number}", "--jq", ".merged, .base.ref"],
                                       env=env, text=True, stderr=subprocess.STDOUT)
@@ -83,12 +81,10 @@ def snapshot(repo, branch, dirs, cfg_text, message):
             item.unlink()
     run("git", "rm", "-rf", "--cached", "--ignore-unmatch", ".", cwd=repo)
 
+    # The recipe stays in the snapshot so the commit says what went into it: the
+    # production promotion refuses a candidate built with refs/pull lines.
     (repo / "repos.yml").write_text(cfg_text, encoding="utf-8")
     run("gitaggregate", "-c", "repos.yml", cwd=repo)
-    # Keep the recipe in the snapshot so the commit says what went into it: the
-    # production promotion refuses a candidate built with refs/pull lines. With
-    # any credential stripped from the URLs - the branch is deployed to hosts.
-    (repo / "repos.yml").write_text(re.sub(r"(https?://)[^/\s@]+@", r"\1", cfg_text), encoding="utf-8")
 
     # Remove inner .git dirs so aggregated repos become plain directories
     for d in dirs:
@@ -119,11 +115,20 @@ def main():
     run("git", "config", "--global", "user.name", "aggregate-bot")
     run("git", "config", "--global", "user.email", "aggregate-bot@users.noreply.github.com")
 
+    # The qrtl-aggregate App's token reads every repo of the organization;
+    # GITHUB_TOKEN (above) is kept for pushing to this one.
+    read_token = os.environ.get("AGG_APP_TOKEN")
+    if not read_token:
+        raise SystemExit("AGG_APP_TOKEN is required: the qrtl-aggregate token step provides it")
+
     cfg_path = Path(sys.argv[1])
     cfg_text = cfg_path.read_text(encoding="utf-8")
-    # The App token reads every repo of the organization; without it, GITHUB_TOKEN
-    # reads only this one.
-    read_token = os.environ.get("AGG_APP_TOKEN") or token
+    # The App token is the one credential; one in a URL would be committed with
+    # the recipe and deployed with the snapshot. Named by section, never printed.
+    for name, section in (yaml.safe_load(cfg_text) or {}).items():
+        for remote, url in ((section or {}).get("remotes") or {}).items():
+            if re.match(r"https?://[^/\s]+@", str(url)):
+                raise SystemExit(f"repos.yml: {name} remote {remote} embeds a credential; name it by its plain URL")
     cfg_text, dropped = drop_merged_pr_lines(cfg_text, read_token)
     if dropped:
         cfg_path.write_text(cfg_text, encoding="utf-8")
@@ -157,14 +162,10 @@ def main():
     run("git", "clone", repo_url, str(repo))
 
     # Fetches of the organization's repos by their plain URL go through the read
-    # token, so repos.yml carries no credential. Set only now: a rule also
-    # rewrites `remote get-url` and pushes, and the App token cannot write.
-    own = os.environ.get("GITHUB_REPOSITORY")
-    if own:
-        org = own.split("/")[0]
-        prefix = f"https://github.com/{org}/" if os.environ.get("AGG_APP_TOKEN") else f"https://github.com/{own}"
-        authed = prefix.replace("https://", f"https://x-access-token:{read_token}@", 1)
-        run("git", "config", "--global", f"url.{authed}.insteadOf", prefix)
+    # token. Set only now: a rule also rewrites `remote get-url` and pushes, and
+    # the App token cannot write.
+    org = os.environ["GITHUB_REPOSITORY"].split("/")[0]
+    run("git", "config", "--global", f"url.https://x-access-token:{read_token}@github.com/{org}/.insteadOf", f"https://github.com/{org}/")
 
     # The release snapshot (the recipe without its refs/pull lines) is what
     # production promotes; the staging snapshot is the full recipe, or the same
