@@ -20,9 +20,11 @@ the production gate refuses a snapshot built with such lines.
 (`https://github.com/qrtl/<project>-private.git`), with no credential. Each run
 mints a token of the `qrtl-aggregate` GitHub App (read-only on contents and pull
 requests, installed on the organization) and fetches every `qrtl` repo, and reads
-their PRs, through it. The App's id is the organization variable `AGG_APP_ID` and
-its key the organization secret `AGG_APP_PRIVATE_KEY`; the caller passes them with
-`secrets: inherit`. Without them the run's own `GITHUB_TOKEN` is used, which reads
+their PRs, through it. The App's id is the organization variable `AGG_APP_ID`
+(visible to private repos) and its key the organization secret
+`AGG_APP_PRIVATE_KEY`, shared only with the repos that run this workflow (those
+with an `aggregate-config` branch); the caller passes it with `secrets: inherit`.
+A repo the key is not shared with uses the run's own `GITHUB_TOKEN`, which reads
 only the calling repo. A URL that still embeds a credential keeps working.
 
 A merge reaches staging when
@@ -148,7 +150,11 @@ gate can read what a candidate was built from.
    git push origin aggregate-config
    ```
 
-5. Check the Actions tab to verify the workflow runs.
+5. Add the `*-private` repo to the repositories the organization secret
+   `AGG_APP_PRIVATE_KEY` is shared with (qrtl → Settings → Secrets and
+   variables → Actions). Without it the run reads only its own repo.
+
+6. Check the Actions tab to verify the workflow runs.
 
 ## Setup: Migrate existing project
 
@@ -164,6 +170,8 @@ For projects already using aggregate-config (rbkk-private, hls-repos):
 | Secret | Level | Purpose |
 |--------|-------|---------|
 | `GITHUB_TOKEN` | Auto-provided | Pushing to `_git_aggregated` within the same repo |
+| `AGG_APP_PRIVATE_KEY` | Org-level, selected repos | Key of the `qrtl-aggregate` App; reads the organization's repos for the aggregate. Shared only with the repos that run it |
+| `AGG_APP_ID` (variable) | Org-level, private repos | Id of the `qrtl-aggregate` App |
 | `STAGING_SSH_KEY` | Org-level | SSH private key for deploy to staging servers |
 | `PRODUCTION_SSH_KEY` | Repo `production` environment | SSH private key for the promotion; released only to that environment's jobs |
 
