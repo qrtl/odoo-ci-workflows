@@ -70,6 +70,10 @@ on:
       # checked at call time, before any environment, and fails the whole run.
       PRODUCTION_SSH_KEY:
         required: false
+      # Key of the qrtl-aggregate App (gitaggregate.yml); without it the host
+      # fetches with its own credential.
+      AGG_APP_PRIVATE_KEY:
+        required: false
 
 jobs:
   gate:
@@ -158,7 +162,21 @@ jobs:
     environment: ${{ inputs.environment }}
     permissions:
       contents: write
+    env:
+      # Whether this repo may use the App's key; the key itself stays out of env.
+      HAS_APP_KEY: ${{ secrets.AGG_APP_PRIVATE_KEY != '' }}
     steps:
+      # A one-hour token that reads this repo alone, for the host's fetch.
+      - name: Mint the qrtl-aggregate token
+        id: app
+        if: env.HAS_APP_KEY == 'true'
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ vars.AGG_APP_ID }}
+          private-key: ${{ secrets.AGG_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+
       - name: Configure SSH
         env:
           KEY: ${{ secrets.PRODUCTION_SSH_KEY }}
@@ -182,12 +200,14 @@ jobs:
           SERVICE: ${{ inputs.service_name }}
           SRC: ${{ inputs.odoo_source_path }}
           HTTP_PORT: ${{ inputs.http_port }}
+          FETCH_TOKEN: ${{ steps.app.outputs.token }}
+          FETCH_REPO: ${{ github.repository }}
         run: |
           # The default shell has no pipefail: without it the step takes tee's
           # status, and a failed promotion would show green.
           set -o pipefail
           {
-            for v in SHA DBS I18N DRY_RUN REPUBLISH LAST_SHA PROJECT_DIR SERVICE SRC HTTP_PORT; do
+            for v in SHA DBS I18N DRY_RUN REPUBLISH LAST_SHA PROJECT_DIR SERVICE SRC HTTP_PORT FETCH_TOKEN FETCH_REPO; do
               printf '%s=%q\n' "$v" "${!v}"
             done
             cat <<'REMOTE'
@@ -229,7 +249,18 @@ jobs:
             fi
           fi
           image_id=$(docker inspect --format '{{.Image}}' "$SERVICE")
-          sudo -n -u odoo git -C "$PROJECT_DIR" fetch -q origin "$SHA"
+          if [ -n "$FETCH_TOKEN" ]; then
+            # The run's read token reaches git through a credential helper reading
+            # a file only odoo can read (see deploy-staging.yml).
+            token_file=$(sudo -n -u odoo mktemp)
+            trap 'sudo -n -u odoo rm -f "$token_file"' EXIT
+            printf '%s' "$FETCH_TOKEN" | sudo -n -u odoo tee "$token_file" >/dev/null
+            sudo -n -u odoo git -C "$PROJECT_DIR" -c credential.helper= \
+              -c "credential.helper=!f() { [ \"\$1\" = get ] || return 0; echo username=x-access-token; echo \"password=\$(cat $token_file)\"; }; f" \
+              fetch -q "https://github.com/$FETCH_REPO.git" "$SHA"
+          else
+            sudo -n -u odoo git -C "$PROJECT_DIR" fetch -q origin "$SHA"
+          fi
           # Odoo must load the checkout this run resets. A host still on per-repo
           # clones would upgrade and restart on its old code while the record
           # claims $SHA (qrtl-prod, 2026-09-28), and a clone left in the path

@@ -170,7 +170,7 @@ For projects already using aggregate-config (rbkk-private, hls-repos):
 | Secret | Level | Purpose |
 |--------|-------|---------|
 | `GITHUB_TOKEN` | Auto-provided | Pushing to `_git_aggregated` within the same repo |
-| `AGG_APP_PRIVATE_KEY` | Org-level, selected repos | Key of the `qrtl-aggregate` App; reads the organization's repos for the aggregate. Shared only with the repos that run it |
+| `AGG_APP_PRIVATE_KEY` | Org-level, selected repos | Key of the `qrtl-aggregate` App; reads the organization's repos for the aggregate, and the project's repo for the staging and production hosts' fetch (so a host needs no GitHub credential). Shared only with the repos that run the aggregate; the caller passes it with `secrets: inherit` |
 | `AGG_APP_ID` (variable) | Org-level, private repos | Id of the `qrtl-aggregate` App |
 | `STAGING_SSH_KEY` | Org-level | SSH private key for deploy to staging servers |
 | `PRODUCTION_SSH_KEY` | Repo `production` environment | SSH private key for the promotion; released only to that environment's jobs |
