@@ -66,12 +66,25 @@ on:
     secrets:
       STAGING_SSH_KEY:
         required: true
+      # Key of the qrtl-aggregate App, for the host's fetch. Not `required`: the
+      # token action names the fix instead of failing the call.
+      AGG_APP_PRIVATE_KEY:
+        required: false
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
 
     steps:
+      # A token that reads this repo alone, for the host's fetch.
+      - name: Mint the qrtl-aggregate token
+        id: app
+        uses: qrtl/odoo-ci-workflows/.github/actions/qrtl-aggregate-token@main
+        with:
+          app-id: ${{ vars.AGG_APP_ID }}
+          private-key: ${{ secrets.AGG_APP_PRIVATE_KEY }}
+          repositories: ${{ github.event.repository.name }}
+
       - name: Configure SSH
         run: |
           mkdir -p ~/.ssh
@@ -97,6 +110,8 @@ jobs:
           UPGRADE_EXCLUDE_REGEX: ${{ inputs.upgrade_exclude_regex }}
           I18N_OVERWRITE: ${{ inputs.i18n_overwrite }}
           ODOO_SOURCE_PATH: ${{ inputs.odoo_source_path }}
+          FETCH_TOKEN: ${{ steps.app.outputs.token }}
+          FETCH_REPO: ${{ github.repository }}
         run: |
           {
             printf 'project_dir=%q\n'       "$PROJECT_DIR"
@@ -106,6 +121,8 @@ jobs:
             printf 'upgrade_exclude_regex=%q\n' "$UPGRADE_EXCLUDE_REGEX"
             printf 'i18n_overwrite=%q\n'    "$I18N_OVERWRITE"
             printf 'odoo_source_path=%q\n'  "$ODOO_SOURCE_PATH"
+            printf 'fetch_token=%q\n'       "$FETCH_TOKEN"
+            printf 'fetch_repo=%q\n'        "$FETCH_REPO"
             cat <<'REMOTE'
           set -e
 
@@ -133,7 +150,16 @@ jobs:
           flock -w 1800 200 || { echo "Host lock $LOCKFILE held for 30 minutes; giving up"; exit 1; }
 
           cd "$project_dir"
-          sudo -u odoo git fetch origin "$deploy_branch"
+          # The run's read token reaches git through a credential helper reading a
+          # file only odoo can read: never on a command line or in the host's git
+          # config, and the host needs no GitHub credential of its own.
+          [ -n "$fetch_token" ] || { echo "no read token for the fetch" >&2; exit 1; }
+          token_file=$(sudo -u odoo mktemp)
+          trap 'sudo -u odoo rm -f "$token_file"' EXIT
+          printf '%s' "$fetch_token" | sudo -u odoo tee "$token_file" >/dev/null
+          sudo -u odoo git -c credential.helper= \
+            -c "credential.helper=!f() { [ \"\$1\" = get ] || return 0; echo username=x-access-token; echo \"password=\$(cat $token_file)\"; }; f" \
+            fetch "https://github.com/$fetch_repo.git" "+refs/heads/$deploy_branch:refs/remotes/origin/$deploy_branch"
           sudo -u odoo git reset --hard "origin/$deploy_branch"
           docker restart "$service_name"
 

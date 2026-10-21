@@ -17,15 +17,19 @@ config branch with `[skip ci]`: the base branch already carries the change, and
 the production gate refuses a snapshot built with such lines.
 
 `repos.yml` names every repo by its plain URL
-(`https://github.com/qrtl/<project>-private.git`), with no credential. Each run
-mints a token of the `qrtl-aggregate` GitHub App (read-only on contents and pull
-requests, installed on the organization) and fetches every `qrtl` repo, and reads
-their PRs, through it. The App's id is the organization variable `AGG_APP_ID`
-(visible to private repos) and its key the organization secret
-`AGG_APP_PRIVATE_KEY`, shared only with the repos that run this workflow (those
-with an `aggregate-config` branch); the caller passes it with `secrets: inherit`.
-A repo the key is not shared with uses the run's own `GITHUB_TOKEN`, which reads
-only the calling repo. A URL that still embeds a credential keeps working.
+(`https://github.com/qrtl/<project>-private.git`); a URL that embeds a credential
+is refused. Each run mints a token of the `qrtl-aggregate` GitHub App (read-only
+on contents and pull requests, installed on the organization) and fetches every
+`qrtl` repo, and reads their PRs, through it; `GITHUB_TOKEN` only pushes the
+snapshot. The deploy workflows mint one limited to the project's repo for the
+host's fetch, so a host needs no GitHub credential either. All three use
+`.github/actions/qrtl-aggregate-token`.
+
+The App's id is the organization variable `AGG_APP_ID` (visible to private repos)
+and its key the organization secret `AGG_APP_PRIVATE_KEY`, shared only with the
+repos that run these workflows (those with an `aggregate-config` branch); the
+caller passes it with `secrets: inherit`. A repo without them fails with the fix
+spelled out.
 
 A merge reaches staging when
 `/merge-pr` drops its line or dispatches this workflow, and production through
@@ -95,7 +99,7 @@ keeps serving, restarts Odoo (the only downtime), and records the deploy on the 
 `prod/<host>/<time>`. Caller: `templates/caller-promote.yml`. Design and
 rationale: odoo-ansible `plans/production-deploy-promotion.md`.
 
-The snapshot commit keeps its `repos.yml` (credentials stripped from URLs) so the
+The snapshot commit keeps its `repos.yml` (which holds no credential) so the
 gate can read what a candidate was built from.
 
 ## Project classification
@@ -152,25 +156,26 @@ gate can read what a candidate was built from.
 
 5. Add the `*-private` repo to the repositories the organization secret
    `AGG_APP_PRIVATE_KEY` is shared with (qrtl → Settings → Secrets and
-   variables → Actions). Without it the run reads only its own repo.
+   variables → Actions). Without it the aggregate and the deploys fail, saying so.
 
 6. Check the Actions tab to verify the workflow runs.
 
 ## Setup: Migrate existing project
 
-For projects already using aggregate-config (rbkk-private, hls-repos):
+For a project whose `aggregate-config` still runs its own `scripts/aggregate.py`:
 
 1. On the `aggregate-config` branch, replace `.github/workflows/aggregate.yml`
    with the appropriate caller template.
 2. Delete `scripts/aggregate.py` (no longer needed locally).
-3. Commit and push. The existing `repos.yml` works unchanged.
+3. In `repos.yml`, name every repo by its plain URL (drop any credential).
+4. Add the repo to `AGG_APP_PRIVATE_KEY`'s repository list, then commit and push.
 
 ## Secrets
 
 | Secret | Level | Purpose |
 |--------|-------|---------|
 | `GITHUB_TOKEN` | Auto-provided | Pushing to `_git_aggregated` within the same repo |
-| `AGG_APP_PRIVATE_KEY` | Org-level, selected repos | Key of the `qrtl-aggregate` App; reads the organization's repos for the aggregate. Shared only with the repos that run it |
+| `AGG_APP_PRIVATE_KEY` | Org-level, selected repos | Key of the `qrtl-aggregate` App; reads the organization's repos for the aggregate, and the project's repo for the staging and production hosts' fetch (so a host needs no GitHub credential). Shared only with the repos that run the aggregate; the caller passes it with `secrets: inherit` |
 | `AGG_APP_ID` (variable) | Org-level, private repos | Id of the `qrtl-aggregate` App |
 | `STAGING_SSH_KEY` | Org-level | SSH private key for deploy to staging servers |
 | `PRODUCTION_SSH_KEY` | Repo `production` environment | SSH private key for the promotion; released only to that environment's jobs |
