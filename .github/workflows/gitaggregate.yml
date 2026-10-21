@@ -39,6 +39,9 @@ jobs:
       contents: write
     outputs:
       changed: ${{ steps.build.outputs.changed }}
+    env:
+      # Whether this repo may use the App's key; the key itself stays out of env.
+      HAS_APP_KEY: ${{ secrets.AGG_APP_PRIVATE_KEY != '' }}
 
     steps:
       - uses: actions/checkout@v4
@@ -57,10 +60,21 @@ jobs:
 
       - run: pip install git-aggregator pyyaml
 
+      # Reads the organization's private repos; skipped where the key is not shared.
+      - name: Mint the qrtl-aggregate token
+        id: app
+        if: env.HAS_APP_KEY == 'true'
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ vars.AGG_APP_ID }}
+          private-key: ${{ secrets.AGG_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
       - name: Build addons and push to ${{ inputs.target_branch }}
         id: build
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          AGG_APP_TOKEN: ${{ steps.app.outputs.token }}
           TARGET_BRANCH: ${{ inputs.target_branch }}
           CONFIG_BRANCH: ${{ inputs.config_branch }}
           COMMIT_MESSAGE: ${{ inputs.commit_message }}

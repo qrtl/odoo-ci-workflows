@@ -14,13 +14,20 @@ repos (oca, custom, private) are merged into a single branch with embedded
 Before aggregating, every uncommented `refs/pull/N/head` line whose PR is merged
 is commented out (`(MERGED)`) and the cleaned `repos.yml` is pushed back to the
 config branch with `[skip ci]`: the base branch already carries the change, and
-the production gate refuses a snapshot built with such lines. A private repo's
-line is checked with the credential in its own URL, or with the run's token when
-the URL has none.
+the production gate refuses a snapshot built with such lines.
 
-The calling `*-private` repo can be named by its plain URL
-(`https://github.com/qrtl/<project>-private.git`): the run's own token is used to
-fetch it. Only another private repo needs a credential in its URL. A merge reaches staging when
+`repos.yml` names every repo by its plain URL
+(`https://github.com/qrtl/<project>-private.git`), with no credential. Each run
+mints a token of the `qrtl-aggregate` GitHub App (read-only on contents and pull
+requests, installed on the organization) and fetches every `qrtl` repo, and reads
+their PRs, through it. The App's id is the organization variable `AGG_APP_ID`
+(visible to private repos) and its key the organization secret
+`AGG_APP_PRIVATE_KEY`, shared only with the repos that run this workflow (those
+with an `aggregate-config` branch); the caller passes it with `secrets: inherit`.
+A repo the key is not shared with uses the run's own `GITHUB_TOKEN`, which reads
+only the calling repo. A URL that still embeds a credential keeps working.
+
+A merge reaches staging when
 `/merge-pr` drops its line or dispatches this workflow, and production through
 `/deploy-prod`. The job reports `changed`, and the template deploys only on a new
 snapshot or a manual run.
@@ -143,7 +150,11 @@ gate can read what a candidate was built from.
    git push origin aggregate-config
    ```
 
-5. Check the Actions tab to verify the workflow runs.
+5. Add the `*-private` repo to the repositories the organization secret
+   `AGG_APP_PRIVATE_KEY` is shared with (qrtl → Settings → Secrets and
+   variables → Actions). Without it the run reads only its own repo.
+
+6. Check the Actions tab to verify the workflow runs.
 
 ## Setup: Migrate existing project
 
@@ -159,6 +170,8 @@ For projects already using aggregate-config (rbkk-private, hls-repos):
 | Secret | Level | Purpose |
 |--------|-------|---------|
 | `GITHUB_TOKEN` | Auto-provided | Pushing to `_git_aggregated` within the same repo |
+| `AGG_APP_PRIVATE_KEY` | Org-level, selected repos | Key of the `qrtl-aggregate` App; reads the organization's repos for the aggregate. Shared only with the repos that run it |
+| `AGG_APP_ID` (variable) | Org-level, private repos | Id of the `qrtl-aggregate` App |
 | `STAGING_SSH_KEY` | Org-level | SSH private key for deploy to staging servers |
 | `PRODUCTION_SSH_KEY` | Repo `production` environment | SSH private key for the promotion; released only to that environment's jobs |
 

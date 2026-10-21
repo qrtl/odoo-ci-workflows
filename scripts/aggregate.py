@@ -28,7 +28,7 @@ def pr_merged(remote_url, number, base, token):
     m = re.search(r"github\.com[:/]([^/\s]+)/([^/\s]+?)(?:\.git)?/?$", remote_url)
     if not m:
         return None
-    # A private repo's URL carries its own credential; GITHUB_TOKEN reads only this repo.
+    # A URL may still carry its own credential; otherwise the read token is used.
     cred = re.search(r"https?://([^@/\s]+)@", remote_url)
     env = dict(os.environ, GH_TOKEN=cred.group(1).split(":")[-1] if cred else token)
     try:
@@ -121,7 +121,10 @@ def main():
 
     cfg_path = Path(sys.argv[1])
     cfg_text = cfg_path.read_text(encoding="utf-8")
-    cfg_text, dropped = drop_merged_pr_lines(cfg_text, token)
+    # The App token reads every repo of the organization; without it, GITHUB_TOKEN
+    # reads only this one.
+    read_token = os.environ.get("AGG_APP_TOKEN") or token
+    cfg_text, dropped = drop_merged_pr_lines(cfg_text, read_token)
     if dropped:
         cfg_path.write_text(cfg_text, encoding="utf-8")
         run("git", "add", str(cfg_path))
@@ -142,16 +145,6 @@ def main():
 
     os.environ["GIT_TERMINAL_PROMPT"] = "0"
 
-    # The run's token reads this repository, so repos.yml can name it by its
-    # plain URL instead of embedding a credential that can expire.
-    own = os.environ.get("GITHUB_REPOSITORY")
-    if own:
-        run(
-            "git", "config", "--global",
-            f"url.https://x-access-token:{token}@github.com/{own}.insteadOf",
-            f"https://github.com/{own}",
-        )
-
     # NNN-private を token付き HTTPS で clone（origin をいじらず push まで通す）
     repo_url = sh("git", "remote", "get-url", "origin")  # checkout済みのこのrepo
     # 例: https://github.com/ORG/NNN-private.git
@@ -162,6 +155,16 @@ def main():
 
     repo = work / "repo"
     run("git", "clone", repo_url, str(repo))
+
+    # Fetches of the organization's repos by their plain URL go through the read
+    # token, so repos.yml carries no credential. Set only now: a rule also
+    # rewrites `remote get-url` and pushes, and the App token cannot write.
+    own = os.environ.get("GITHUB_REPOSITORY")
+    if own:
+        org = own.split("/")[0]
+        prefix = f"https://github.com/{org}/" if os.environ.get("AGG_APP_TOKEN") else f"https://github.com/{own}"
+        authed = prefix.replace("https://", f"https://x-access-token:{read_token}@", 1)
+        run("git", "config", "--global", f"url.{authed}.insteadOf", prefix)
 
     # The release snapshot (the recipe without its refs/pull lines) is what
     # production promotes; the staging snapshot is the full recipe, or the same
